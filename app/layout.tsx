@@ -15,7 +15,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable}`}>
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `
+          (function(){
+            var t = localStorage.getItem('theme');
+            if(t === 'light') document.documentElement.classList.remove('dark');
+            else document.documentElement.classList.add('dark');
+          })();
+        `}} />
+      </head>
       <body className="antialiased bg-background text-foreground">
         <SWRProvider>{children}</SWRProvider>
       </body>

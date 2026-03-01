@@ -36,8 +36,10 @@ export function SessionCard({ session, isActive, onClick }: Props) {
   return (
     <div
       onClick={onClick}
-      className={`px-4 py-3 border-b border-border transition-colors cursor-pointer hover:bg-accent/50 ${
-        isActive ? 'bg-accent' : ''
+      className={`px-4 py-3 border-b border-border transition-all duration-150 cursor-pointer border-l-[3px] ${
+        isActive
+          ? 'bg-gradient-to-r from-emerald-500/40 via-emerald-500/10 to-transparent border-l-emerald-300 [box-shadow:inset_3px_0_24px_rgba(110,231,183,0.28)]'
+          : 'border-l-transparent hover:bg-accent/50 hover:border-l-emerald-600/40'
       }`}
     >
       <div className="flex items-start justify-between gap-2 mb-1">

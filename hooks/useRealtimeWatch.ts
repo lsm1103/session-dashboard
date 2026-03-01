@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useSWRConfig } from 'swr';
 
-export function useRealtimeWatch() {
+export function useRealtimeWatch(currentSessionId?: string) {
   const { mutate } = useSWRConfig();
 
   useEffect(() => {
@@ -17,6 +17,14 @@ export function useRealtimeWatch() {
             key.startsWith('/api/projects') ||
             key.startsWith('/api/stats')
           ));
+
+          // If the current open session's file changed, refresh it precisely
+          if (currentSessionId && data.event === 'updated') {
+            const sessionUuid = currentSessionId.replace(/^(cc-|cdx-)/, '');
+            if (data.path && String(data.path).includes(sessionUuid)) {
+              mutate(`/api/sessions/${currentSessionId}`);
+            }
+          }
         }
       } catch {
         // ignore parse errors
@@ -28,5 +36,5 @@ export function useRealtimeWatch() {
     };
 
     return () => es.close();
-  }, [mutate]);
+  }, [mutate, currentSessionId]);
 }

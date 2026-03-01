@@ -19,6 +19,8 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.6.5",
+    "shiki": "^4.0.0",
     "swr": "^2.4.1",
     "tailwind-merge": "^3.5.0"
   },

@@ -55,6 +55,7 @@ async function parseCodexFile(filePath: string): Promise<{
   const messages: Message[] = [];
   let title = '';
   let lastActivity: Date | null = null;
+  let pendingReasoning: string | null = null;
 
   for (const rawLine of lines) {
     let line: Record<string, unknown>;
@@ -72,6 +73,62 @@ async function parseCodexFile(filePath: string): Promise<{
 
     if (line.type === 'response_item') {
       const payload = line.payload as Record<string, unknown>;
+
+      // Handle reasoning type
+      if (payload.type === 'reasoning') {
+        let reasoningText = '';
+        const contentArr = payload.content as Array<Record<string, unknown>> | undefined;
+        const summaryArr = payload.summary as Array<Record<string, unknown>> | undefined;
+        if (contentArr) {
+          reasoningText = contentArr
+            .filter(c => c.type === 'input_text')
+            .map(c => String(c.text))
+            .join('');
+        }
+        if (!reasoningText && summaryArr) {
+          reasoningText = summaryArr
+            .map(c => String(c.text || ''))
+            .join('');
+        }
+        if (reasoningText) {
+          // Store pending reasoning to attach to next assistant message
+          pendingReasoning = reasoningText;
+        }
+        continue;
+      }
+
+      // Handle function_call type
+      if (payload.type === 'function_call') {
+        const name = String(payload.name || 'unknown');
+        let argsStr: string;
+        try {
+          const args = typeof payload.arguments === 'string'
+            ? JSON.parse(payload.arguments)
+            : payload.arguments;
+          argsStr = JSON.stringify(args, null, 2);
+        } catch {
+          argsStr = String(payload.arguments || '{}');
+        }
+        const content = `🔧 **${name}**\n\`\`\`json\n${argsStr}\n\`\`\``;
+        const msgId = `${meta?.id || 'cdx'}-fc-${messages.length}`;
+        const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
+        lastActivity = ts;
+        messages.push({ id: msgId, role: 'assistant', content, timestamp: ts });
+        continue;
+      }
+
+      // Handle function_call_output type
+      if (payload.type === 'function_call_output') {
+        const output = String(payload.output || '');
+        const truncated = output.length > 500 ? output.slice(0, 500) + '...' : output;
+        const content = `📤 **工具返回**\n\`\`\`\n${truncated}\n\`\`\``;
+        const msgId = `${meta?.id || 'cdx'}-fo-${messages.length}`;
+        const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
+        lastActivity = ts;
+        messages.push({ id: msgId, role: 'assistant', content, timestamp: ts });
+        continue;
+      }
+
       if (payload.type !== 'message') continue;
 
       const role = payload.role as string;
@@ -103,17 +160,36 @@ async function parseCodexFile(filePath: string): Promise<{
           .join('');
         if (!textContent) continue;
 
+        // Prepend pending reasoning if available
+        let finalContent = textContent;
+        if (pendingReasoning) {
+          finalContent = `> 💭 ${pendingReasoning}\n\n${textContent}`;
+          pendingReasoning = null;
+        }
+
         const msgId = `${meta?.id || 'cdx'}-a-${messages.length}`;
         const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
         lastActivity = ts;
         messages.push({
           id: msgId,
           role: 'assistant',
-          content: textContent,
+          content: finalContent,
           timestamp: ts,
         });
       }
     }
+  }
+
+  // If there's leftover reasoning not followed by an assistant message, emit as standalone
+  if (pendingReasoning) {
+    const msgId = `${meta?.id || 'cdx'}-r-${messages.length}`;
+    messages.push({
+      id: msgId,
+      role: 'assistant',
+      content: `> 💭 ${pendingReasoning}`,
+      timestamp: lastActivity || new Date(),
+    });
+    pendingReasoning = null;
   }
 
   if (!meta) return null;

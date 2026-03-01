@@ -123,4 +123,27 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* 滚动条整体宽度 */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  /* track 透明，不抢色 */
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  /* 滑块：和主体融合，hover 时略亮 */
+  ::-webkit-scrollbar-thumb {
+    background: oklch(1 0 0 / 12%);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(1 0 0 / 22%);
+  }
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(1 0 0 / 12%) transparent;
+  }
 }

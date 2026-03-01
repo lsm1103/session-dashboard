@@ -32,6 +32,11 @@ function getWatcher() {
     broadcast({ event: 'updated', toolId, path: filePath });
   });
 
+  // Graceful cleanup on process exit
+  const cleanup = () => { watcher?.close(); watcher = null; };
+  process.once('SIGTERM', cleanup);
+  process.once('SIGINT', cleanup);
+
   return watcher;
 }
 

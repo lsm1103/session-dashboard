@@ -56,6 +56,10 @@ async function readLines(filePath: string): Promise<string[]> {
   return lines;
 }
 
+// Module-level cache: key = filePath, value = { mtime: number, result: ParsedSession }
+type ParsedSession = NonNullable<Awaited<ReturnType<typeof parseSessionFile>>>;
+const parseCache = new Map<string, { mtime: number; result: ParsedSession }>();
+
 async function parseSessionFile(filePath: string): Promise<{
   sessionId: string;
   cwd: string;
@@ -64,6 +68,17 @@ async function parseSessionFile(filePath: string): Promise<{
   messages: Message[];
   title: string;
 } | null> {
+  // Check cache by file mtime
+  try {
+    const mtime = fs.statSync(filePath).mtimeMs;
+    const cached = parseCache.get(filePath);
+    if (cached && cached.mtime === mtime) {
+      return cached.result;
+    }
+  } catch {
+    // File may not exist; continue to let readLines handle the error
+  }
+
   let lines: string[];
   try {
     lines = await readLines(filePath);
@@ -145,7 +160,7 @@ async function parseSessionFile(filePath: string): Promise<{
     sessionId = path.basename(filePath, '.jsonl');
   }
 
-  return {
+  const result = {
     sessionId,
     cwd: cwd || path.dirname(filePath),
     startTime: startTime || new Date(fs.statSync(filePath).mtime),
@@ -153,6 +168,16 @@ async function parseSessionFile(filePath: string): Promise<{
     messages,
     title: title || 'Untitled session',
   };
+
+  // Store in cache
+  try {
+    const mtime = fs.statSync(filePath).mtimeMs;
+    parseCache.set(filePath, { mtime, result });
+  } catch {
+    // Ignore cache store errors
+  }
+
+  return result;
 }
 
 export class ClaudeCodeAdapter implements ISessionAdapter {
@@ -265,55 +290,69 @@ export class ClaudeCodeAdapter implements ISessionAdapter {
       .filter(d => d.isDirectory())
       .map(d => d.name);
 
+    // 收集所有匹配该 uuid 的文件（同一 session 可能因 symlink/路径差异分散在多个目录）
+    const matchedFiles: string[] = [];
+
     for (const dir of dirs) {
       const dirPath = path.join(BASE_PATH, dir);
       const jsonlFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
-
       for (const file of jsonlFiles) {
-        // Match by filename (uuid.jsonl) or by sessionId inside
         if (file === `${uuid}.jsonl` || file.includes(uuid)) {
+          matchedFiles.push(path.join(dirPath, file));
+        }
+      }
+    }
+
+    // 如果按文件名没找到，按内部 sessionId 字段再扫一遍
+    if (matchedFiles.length === 0) {
+      for (const dir of dirs) {
+        const dirPath = path.join(BASE_PATH, dir);
+        const jsonlFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
+        for (const file of jsonlFiles) {
           const filePath = path.join(dirPath, file);
-          const parsed = await parseSessionFile(filePath);
-          if (!parsed) continue;
-
-          return {
-            id,
-            toolId: 'claude-code',
-            projectPath: parsed.cwd,
-            title: parsed.title,
-            messageCount: parsed.messages.length,
-            startTime: parsed.startTime,
-            lastActivity: parsed.lastActivity,
-            messages: parsed.messages,
-          };
+          try {
+            const firstLine = fs.readFileSync(filePath, 'utf8').split('\n')[0];
+            const parsed = firstLine ? JSON.parse(firstLine) : null;
+            if (parsed?.sessionId === uuid) matchedFiles.push(filePath);
+          } catch { /* skip */ }
         }
       }
     }
 
-    // Second pass: search by sessionId inside files
-    for (const dir of dirs) {
-      const dirPath = path.join(BASE_PATH, dir);
-      const jsonlFiles = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl'));
-
-      for (const file of jsonlFiles) {
-        const filePath = path.join(dirPath, file);
-        const parsed = await parseSessionFile(filePath);
-        if (!parsed) continue;
-        if (parsed.sessionId === uuid) {
-          return {
-            id,
-            toolId: 'claude-code',
-            projectPath: parsed.cwd,
-            title: parsed.title,
-            messageCount: parsed.messages.length,
-            startTime: parsed.startTime,
-            lastActivity: parsed.lastActivity,
-            messages: parsed.messages,
-          };
-        }
-      }
+    if (matchedFiles.length === 0) {
+      throw new Error(`Session not found: ${id}`);
     }
 
-    throw new Error(`Session not found: ${id}`);
+    // 解析所有匹配文件并合并消息
+    const allParsed = (await Promise.all(matchedFiles.map(f => parseSessionFile(f))))
+      .filter(Boolean) as NonNullable<Awaited<ReturnType<typeof parseSessionFile>>>[];
+
+    if (allParsed.length === 0) {
+      throw new Error(`Session not found: ${id}`);
+    }
+
+    // 取最新的元数据（cwd、title 等），合并所有消息后按时间戳排序去重
+    allParsed.sort((a, b) => b.lastActivity.getTime() - a.lastActivity.getTime());
+    const best = allParsed[0];
+
+    const allMessages = allParsed.flatMap(p => p.messages);
+    // 按时间戳排序，内容相同的相邻消息去重
+    allMessages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const dedupedMessages = allMessages.filter((msg, i) => {
+      if (i === 0) return true;
+      const prev = allMessages[i - 1];
+      return !(msg.role === prev.role && msg.content === prev.content);
+    });
+
+    return {
+      id,
+      toolId: 'claude-code',
+      projectPath: best.cwd,
+      title: best.title,
+      messageCount: dedupedMessages.length,
+      startTime: allParsed[allParsed.length - 1].startTime,
+      lastActivity: best.lastActivity,
+      messages: dedupedMessages,
+    };
   }
 }
