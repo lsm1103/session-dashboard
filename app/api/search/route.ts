@@ -185,12 +185,12 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q') || '';
   const limit = Math.min(parseInt(searchParams.get('limit') || '20', 10), 100);
+  const projectPath = searchParams.get('projectPath') || '';
 
   if (!query.trim()) {
     return NextResponse.json([]);
   }
 
-  // Collect all JSONL files from both adapters
   const claudeFiles = getAllJsonlFiles(CLAUDE_BASE).map(f => ({ path: f, toolId: 'claude-code' }));
   const codexFiles = getAllJsonlFiles(CODEX_BASE).map(f => ({ path: f, toolId: 'codex' }));
   const allFiles = [...claudeFiles, ...codexFiles];
@@ -217,10 +217,13 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Sort by matchCount descending
-    results.sort((a, b) => b.matchCount - a.matchCount);
+    // Filter by projectPath if specified (searchFile already extracts it)
+    const filtered = projectPath
+      ? results.filter(r => r.projectPath === projectPath)
+      : results;
 
-    return NextResponse.json(results.slice(0, limit));
+    filtered.sort((a, b) => b.matchCount - a.matchCount);
+    return NextResponse.json(filtered.slice(0, limit));
   } finally {
     clearTimeout(timeout);
   }

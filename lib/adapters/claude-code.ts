@@ -94,8 +94,8 @@ async function parseSessionFile(filePath: string): Promise<{
   let title = '';
 
   const SKIP_TYPES = new Set([
-    'progress', 'file-history-snapshot', 'system', 'tool_use',
-    'tool_result', 'thinking', 'image', 'hook_progress', 'agent_progress', 'direct'
+    'progress', 'file-history-snapshot', 'system',
+    'thinking', 'image', 'hook_progress', 'agent_progress', 'direct'
   ]);
 
   for (const rawLine of lines) {
@@ -116,6 +116,56 @@ async function parseSessionFile(filePath: string): Promise<{
     }
 
     if (SKIP_TYPES.has(String(line.type))) continue;
+
+    // tool_use 事件：工具调用
+    if (line.type === 'tool_use') {
+      const toolName = String((line as Record<string, unknown>).name || 'unknown');
+      const input = (line as Record<string, unknown>).input;
+      let inputStr: string;
+      try {
+        inputStr = JSON.stringify(input, null, 2);
+      } catch {
+        inputStr = String(input || '{}');
+      }
+      // 截断超长输入
+      if (inputStr.length > 800) inputStr = inputStr.slice(0, 800) + '\n...';
+
+      const msgId = `${sessionId}-tu-${messages.length}`;
+      messages.push({
+        id: msgId,
+        role: 'assistant' as const,
+        content: `\x00TOOL_USE\x00${toolName}\x00${inputStr}`,
+        timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
+      });
+      continue;
+    }
+
+    // tool_result 事件：工具返回
+    if (line.type === 'tool_result') {
+      const content = (line as Record<string, unknown>).content;
+      let resultStr: string;
+      if (typeof content === 'string') {
+        resultStr = content;
+      } else if (Array.isArray(content)) {
+        resultStr = content
+          .filter((c: unknown) => typeof c === 'object' && c !== null && (c as Record<string, unknown>).type === 'text')
+          .map((c: unknown) => String((c as Record<string, unknown>).text))
+          .join('\n');
+      } else {
+        resultStr = JSON.stringify(content);
+      }
+      // 截断
+      if (resultStr.length > 600) resultStr = resultStr.slice(0, 600) + '\n...';
+
+      const msgId = `${sessionId}-tr-${messages.length}`;
+      messages.push({
+        id: msgId,
+        role: 'assistant' as const,
+        content: `\x00TOOL_RESULT\x00${resultStr}`,
+        timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
+      });
+      continue;
+    }
 
     if (isValidUserMessage(line)) {
       const msg = line.message as Record<string, unknown>;

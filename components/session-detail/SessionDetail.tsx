@@ -188,7 +188,7 @@ export function SessionDetail({ sessionId, onClose }: Props) {
                 <div className="flex-1 h-px bg-border/50" />
               </div>
               {group.messages.map(msg => (
-                <MessageBubble key={msg.id} message={msg} />
+                <MessageBubble key={msg.id} message={msg} toolId={session.toolId} />
               ))}
             </div>
           ))

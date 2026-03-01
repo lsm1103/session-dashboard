@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Copy, Check } from 'lucide-react';
 import type { Message } from '@/lib/types';
+import { ToolUseBlock, ToolResultBlock } from './ToolCallBlock';
 
 interface Props {
   message: Message;
@@ -12,6 +13,9 @@ interface Props {
 
 export const MessageBubble = React.memo(function MessageBubble({ message, toolId }: Props) {
   const isUser = message.role === 'user';
+  const isToolUse = message.content.startsWith('\x00TOOL_USE\x00');
+  const isToolResult = message.content.startsWith('\x00TOOL_RESULT\x00');
+
   const [copied, setCopied] = useState(false);
   const [highlightedBlocks, setHighlightedBlocks] = useState<Record<string, string>>({});
   const highlighterRef = useRef<Awaited<ReturnType<typeof import('shiki')['createHighlighter']>> | null>(null);
@@ -85,6 +89,26 @@ export const MessageBubble = React.memo(function MessageBubble({ message, toolId
       // clipboard write failed silently
     }
   }, [message.content]);
+
+  // Tool use / tool result special rendering
+  if (isToolUse) {
+    const parts = message.content.split('\x00');
+    // parts: ['', 'TOOL_USE', name, input]
+    return (
+      <div className="mb-2">
+        <ToolUseBlock name={parts[2]} input={parts[3] ?? ''} />
+      </div>
+    );
+  }
+
+  if (isToolResult) {
+    const parts = message.content.split('\x00');
+    return (
+      <div className="mb-1">
+        <ToolResultBlock output={parts[2] ?? ''} />
+      </div>
+    );
+  }
 
   // Tool indicator dot (assistant messages only)
   const toolDot = !isUser && toolId ? (

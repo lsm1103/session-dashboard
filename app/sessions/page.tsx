@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, Suspense, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import useSWR from 'swr';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Project, Session } from '@/lib/types';
 import { SessionCard } from '@/components/session-list/SessionCard';
 import { SessionDetail } from '@/components/session-detail/SessionDetail';
@@ -234,6 +235,16 @@ function FilterTabs({
   );
 }
 
+// ── 全文搜索结果类型 ──────────────────────────────────────────
+interface SearchResult {
+  sessionId: string;
+  toolId: string;
+  projectPath: string;
+  title: string;
+  matchCount: number;
+  snippet: string;
+}
+
 // ── 主组件 ────────────────────────────────────────────────────
 function SessionsBrowser() {
   const searchParams = useSearchParams();
@@ -247,14 +258,24 @@ function SessionsBrowser() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
 
-  // 左栏折叠 + 拖拽宽度
+  // 左栏折叠 + 拖拽宽度（持久化到 localStorage）
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [leftWidth, setLeftWidth] = useState(280);
-  const [middleWidth, setMiddleWidth] = useState(340);
+  const [leftWidth, setLeftWidth] = useState(() =>
+    typeof window !== 'undefined' ? Number(localStorage.getItem('sd-left-w') || 280) : 280
+  );
+  const [middleWidth, setMiddleWidth] = useState(() =>
+    typeof window !== 'undefined' ? Number(localStorage.getItem('sd-middle-w') || 340) : 340
+  );
+
+  // 全文搜索：只在主动提交（Enter / 点按钮）时触发，不持久化模式
+  const [submittedQuery, setSubmittedQuery] = useState('');
 
   // 键盘导航
   const [keyboardIndex, setKeyboardIndex] = useState<number>(-1);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // 虚拟滚动
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -287,6 +308,22 @@ function SessionsBrowser() {
   })();
   const { data: sessions, isLoading: sessionsLoading } = useSWR<Session[]>(sessionsUrl, fetcher);
 
+  // 全文搜索：限定当前项目（selectedProject），无项目时全局搜
+  const fulltextUrl = submittedQuery ? (() => {
+    const q = new URLSearchParams({ q: submittedQuery, limit: '50' });
+    if (selectedProject) q.set('projectPath', selectedProject);
+    return `/api/search?${q}`;
+  })() : null;
+  const { data: searchResults, isLoading: searchLoading } = useSWR<SearchResult[]>(fulltextUrl, fetcher);
+
+  // 虚拟滚动器
+  const virtualizer = useVirtualizer({
+    count: sessions?.length ?? 0,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 72,
+    overscan: 5,
+  });
+
   function selectProject(path: string) {
     const p = new URLSearchParams();
     if (path !== selectedProject) p.set('p', path);
@@ -317,7 +354,11 @@ function SessionsBrowser() {
     e.preventDefault();
     const startX = e.clientX;
     const startW = leftWidth;
-    const onMove = (ev: MouseEvent) => setLeftWidth(Math.max(160, Math.min(480, startW + ev.clientX - startX)));
+    const onMove = (ev: MouseEvent) => {
+      const w = Math.max(160, Math.min(480, startW + ev.clientX - startX));
+      setLeftWidth(w);
+      localStorage.setItem('sd-left-w', String(w));
+    };
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
@@ -327,7 +368,11 @@ function SessionsBrowser() {
     e.preventDefault();
     const startX = e.clientX;
     const startW = middleWidth;
-    const onMove = (ev: MouseEvent) => setMiddleWidth(Math.max(200, Math.min(520, startW + ev.clientX - startX)));
+    const onMove = (ev: MouseEvent) => {
+      const w = Math.max(200, Math.min(520, startW + ev.clientX - startX));
+      setMiddleWidth(w);
+      localStorage.setItem('sd-middle-w', String(w));
+    };
     const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
@@ -353,8 +398,13 @@ function SessionsBrowser() {
 
       // Escape
       if (e.key === 'Escape') {
+        if (submittedQuery) {
+          setSubmittedQuery('');
+          return;
+        }
         if (isInputFocused && search) {
           setSearch('');
+          setSubmittedQuery('');
           (active as HTMLInputElement).blur();
           return;
         }
@@ -526,54 +576,149 @@ function SessionsBrowser() {
         <div className="flex flex-col h-full overflow-hidden">
           {/* 项目信息条 */}
           <div className="shrink-0 px-3 py-2 border-b border-border text-xs flex items-center justify-between">
-            {selectedProject ? (
-              <>
-                <span className="font-medium text-foreground truncate">{lastName(selectedProject)}</span>
-                <span className="text-muted-foreground ml-2 shrink-0">{currentSessionCount} sessions</span>
-              </>
-            ) : (
-              <span className="font-medium text-foreground">所有 Sessions</span>
-            )}
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {selectedProject ? (
+                <>
+                  <span className="font-medium text-foreground truncate">{lastName(selectedProject)}</span>
+                  <span className="text-muted-foreground shrink-0">{currentSessionCount} sessions</span>
+                </>
+              ) : (
+                <span className="font-medium text-foreground">所有 Sessions</span>
+              )}
+            </div>
           </div>
 
-          {/* 搜索框 */}
-          <div className="shrink-0 px-3 py-2.5 border-b border-border">
+          {/* 搜索框 + 模式切换按钮 同一行 */}
+          <div className="shrink-0 px-3 py-2.5 border-b border-border flex items-center gap-1.5">
             <Input
               ref={searchInputRef}
               placeholder="搜索 sessions...  ( / )"
               value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="h-8 text-sm"
+              onChange={e => {
+                setSearch(e.target.value);
+                if (!e.target.value) setSubmittedQuery('');
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && search.trim()) {
+                  if (debounceRef.current) clearTimeout(debounceRef.current);
+                  setDebouncedSearch(search);
+                  setSubmittedQuery(search.trim());
+                }
+              }}
+              className="h-8 text-sm flex-1"
             />
+            <button
+              onClick={() => {
+                if (search.trim()) {
+                  if (debounceRef.current) clearTimeout(debounceRef.current);
+                  setDebouncedSearch(search);
+                  setSubmittedQuery(search.trim());
+                }
+              }}
+              title="全文搜索"
+              className="shrink-0 p-1.5 rounded transition-colors text-muted-foreground hover:text-foreground hover:bg-accent/40"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
-            {sessionsLoading
-              ? Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="px-4 py-3 border-b border-border">
-                    <Skeleton className="h-4 w-3/4 mb-2" />
-                    <Skeleton className="h-3 w-1/2" />
-                  </div>
-                ))
-              : !sessions?.length
-                ? (
+          {/* 全文搜索结果面板（仅 submittedQuery 有值时显示） */}
+          {submittedQuery ? (
+            <div className="flex flex-col flex-1 overflow-hidden">
+              {/* 结果头部：显示关键词 + 关闭按钮 */}
+              <div className="shrink-0 px-3 py-1.5 border-b border-border flex items-center justify-between bg-emerald-500/5">
+                <span className="text-xs text-muted-foreground">
+                  {selectedProject ? `${lastName(selectedProject)} · ` : '全局 · '}
+                  <span className="text-emerald-400 font-medium">"{submittedQuery}"</span>
+                </span>
+                <button
+                  onClick={() => setSubmittedQuery('')}
+                  className="text-muted-foreground hover:text-foreground text-base leading-none px-1"
+                  title="关闭搜索结果"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {searchLoading ? (
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="px-4 py-3 border-b border-border">
+                      <Skeleton className="h-4 w-3/4 mb-2" />
+                      <Skeleton className="h-3 w-full mb-1" />
+                      <Skeleton className="h-3 w-2/3" />
+                    </div>
+                  ))
+                ) : !searchResults?.length ? (
                   <div className="px-4 py-10 text-sm text-muted-foreground text-center">
-                    {debouncedSearch ? '没有匹配的 session' : '暂无 session'}
+                    没有匹配的消息内容
                   </div>
-                )
-                : sessions.map((s, i) => (
+                ) : (
+                  searchResults.map((result, i) => (
                     <div
-                      key={s.id}
-                      className={keyboardIndex === i ? 'ring-1 ring-emerald-400/50 rounded-sm' : ''}
+                      key={`${result.sessionId}-${i}`}
+                      onClick={() => selectSession(result.sessionId)}
+                      className="px-4 py-3 border-b border-border/50 cursor-pointer hover:bg-accent/40 transition-colors"
                     >
-                      <SessionCard
-                        session={s}
-                        isActive={s.id === selectedSession}
-                        onClick={() => selectSession(s.id)}
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-medium text-foreground truncate">{result.title}</span>
+                        {result.matchCount > 1 && (
+                          <span className="shrink-0 text-[10px] text-muted-foreground bg-accent rounded px-1">
+                            {result.matchCount} 处
+                          </span>
+                        )}
+                      </div>
+                      <p
+                        className="text-xs text-muted-foreground line-clamp-2 leading-relaxed [&_mark]:bg-emerald-500/30 [&_mark]:text-emerald-200 [&_mark]:rounded [&_mark]:px-0.5"
+                        dangerouslySetInnerHTML={{
+                          __html: result.snippet.replace(/\*\*(.*?)\*\*/g, '<mark>$1</mark>'),
+                        }}
                       />
                     </div>
-                  ))}
-          </div>
+                  ))
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Session 列表（虚拟滚动） */
+            <div ref={listRef} className="flex-1 overflow-y-auto">
+              {sessionsLoading
+                ? Array.from({ length: 8 }).map((_, i) => (
+                    <div key={i} className="px-4 py-3 border-b border-border">
+                      <Skeleton className="h-4 w-3/4 mb-2" />
+                      <Skeleton className="h-3 w-1/2" />
+                    </div>
+                  ))
+                : !sessions?.length
+                  ? (
+                    <div className="px-4 py-10 text-sm text-muted-foreground text-center">
+                      {debouncedSearch ? '没有匹配的 session' : '暂无 session'}
+                    </div>
+                  )
+                  : (
+                    <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+                      {virtualizer.getVirtualItems().map(item => {
+                        const s = sessions![item.index];
+                        return (
+                          <div
+                            key={s.id}
+                            style={{ position: 'absolute', top: item.start, left: 0, right: 0 }}
+                            className={keyboardIndex === item.index ? 'ring-1 ring-emerald-400/50' : ''}
+                          >
+                            <SessionCard
+                              session={s}
+                              isActive={s.id === selectedSession}
+                              onClick={() => selectSession(s.id)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+            </div>
+          )}
         </div>
       </div>
 
