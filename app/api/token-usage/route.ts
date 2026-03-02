@@ -69,14 +69,15 @@ async function extractTokensFromFile(
     if (toolId === 'claude-code') {
       if (line.type === 'assistant') {
         const msg = line.message as Record<string, unknown> | undefined;
-        // usage 可能在 message.usage 或顶层
         const usage = (msg?.usage as Record<string, number> | undefined)
           || (line.usage as Record<string, number> | undefined);
-        if (usage && (usage.input_tokens || usage.output_tokens)) {
-          inputTokens += usage.input_tokens || 0;
+        if (usage) {
+          // input_tokens 只是未命中缓存的部分，需要加上缓存创建和读取
+          inputTokens += (usage.input_tokens || 0)
+            + (usage.cache_creation_input_tokens || 0)
+            + (usage.cache_read_input_tokens || 0);
           outputTokens += usage.output_tokens || 0;
         } else {
-          // 无 usage 数据时按内容长度估算输出 token
           const content = msg?.content;
           const text = typeof content === 'string' ? content
             : Array.isArray(content)
@@ -103,26 +104,26 @@ async function extractTokensFromFile(
         if (payload?.cwd) cwd = String(payload.cwd);
         if (payload?.id) sessionId = String(payload.id);
       }
-      // usage 可能在顶层或 payload 内
-      const usage = (line.usage as Record<string, number> | undefined)
-        || ((line.payload as Record<string, unknown>)?.usage as Record<string, number> | undefined);
-      if (usage && (usage.input_tokens || usage.output_tokens)) {
-        inputTokens += usage.input_tokens || 0;
-        outputTokens += usage.output_tokens || 0;
+      // Codex token: event_msg + payload.type=token_count + payload.info.total_token_usage
+      // 取累计值（每次 turn 都写，最后一条是整个 session 总量）
+      if (line.type === 'event_msg') {
+        const payload = line.payload as Record<string, unknown> | undefined;
+        if (payload?.type === 'token_count') {
+          const info = payload.info as Record<string, unknown> | undefined;
+          const total = info?.total_token_usage as Record<string, number> | undefined;
+          if (total) {
+            // 用最新的累计值覆盖（不累加，直接替换）
+            inputTokens = (total.input_tokens || 0) + (total.cached_input_tokens || 0);
+            outputTokens = (total.output_tokens || 0) + (total.reasoning_output_tokens || 0);
+          }
+        }
       }
-      // 从 response_item message 内容估算
       if (line.type === 'response_item') {
         const payload = line.payload as Record<string, unknown> | undefined;
-        if (payload?.type === 'message') {
+        if (!title && payload?.type === 'message' && payload.role === 'user') {
           const contentArr = payload.content as Array<Record<string, unknown>> | undefined;
-          if (contentArr && !usage) {
-            const text = contentArr.map(c => String(c.text || '')).join('');
-            if (text) outputTokens += Math.ceil(text.length / 4);
-          }
-          if (!title && payload.role === 'user') {
-            const text = contentArr?.filter(c => c.type === 'input_text').map(c => String(c.text)).join('') || '';
-            if (text && !text.startsWith('#') && !text.startsWith('<')) title = text.slice(0, 80);
-          }
+          const text = contentArr?.filter(c => c.type === 'input_text').map(c => String(c.text)).join('') || '';
+          if (text && !text.startsWith('#') && !text.startsWith('<')) title = text.slice(0, 80);
         }
       }
     }

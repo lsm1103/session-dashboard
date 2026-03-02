@@ -24,9 +24,14 @@ function StatCard({ label, value }: { label: string; value: number | string }) {
 }
 
 export function StatsPanel() {
-  const { data: stats, isLoading } = useSWR<Stats>('/api/stats', fetcher, {
+  const { data: stats, isLoading, mutate } = useSWR<Stats>('/api/stats', fetcher, {
     refreshInterval: 60000,
   });
+
+  async function rebuildIndex() {
+    await fetch('/api/index/rebuild', { method: 'POST' });
+    mutate();
+  }
 
   if (isLoading) {
     return (
@@ -45,6 +50,15 @@ export function StatsPanel() {
 
   return (
     <div className="space-y-4">
+      <div className="flex justify-end">
+        <button
+          onClick={rebuildIndex}
+          className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-accent/50"
+          title="重建本地索引（修复 session 缺失问题）"
+        >
+          ↺ 重建索引
+        </button>
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <StatCard label="Total Sessions" value={stats.totalSessions} />
         <StatCard label="Total Projects" value={stats.totalProjects} />

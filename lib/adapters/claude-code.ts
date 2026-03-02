@@ -87,7 +87,8 @@ async function parseSessionFile(filePath: string): Promise<{
     return null;
   }
 
-  let sessionId = '';
+  // 文件名是 canonical session ID（Claude Code 有时第一行 sessionId 是旧 session 的续写标记）
+  let sessionId = path.basename(filePath, '.jsonl');
   let cwd = '';
   let startTime: Date | null = null;
   let lastActivity: Date | null = null;
@@ -109,8 +110,7 @@ async function parseSessionFile(filePath: string): Promise<{
       continue;
     }
 
-    // Extract session metadata from first event
-    if (!sessionId && line.sessionId) sessionId = String(line.sessionId);
+    // 只提取 cwd（sessionId 已用文件名，不再从内容覆盖）
     if (!cwd && line.cwd) cwd = String(line.cwd);
     if (line.timestamp) {
       const ts = new Date(String(line.timestamp));
