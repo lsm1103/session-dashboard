@@ -17,6 +17,32 @@ export const MessageBubble = React.memo(function MessageBubble({ message, toolId
   const isToolResult = message.content.startsWith('\x00TOOL_RESULT\x00');
 
   const [copied, setCopied] = useState(false);
+
+  // Bookmark state
+  const [isBookmarked, setIsBookmarked] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const all = JSON.parse(localStorage.getItem('sd-msg-bookmarks') || '{}');
+      const sessionId = message.id.replace(/-[ua]-\d+$/, '');
+      return (all[sessionId] || []).includes(message.id);
+    } catch { return false; }
+  });
+
+  const toggleBookmark = useCallback(() => {
+    try {
+      const all = JSON.parse(localStorage.getItem('sd-msg-bookmarks') || '{}');
+      const sessionId = message.id.replace(/-[ua]-\d+$/, '');
+      const current: string[] = all[sessionId] || [];
+      const next = isBookmarked
+        ? current.filter((id: string) => id !== message.id)
+        : [...current, message.id];
+      all[sessionId] = next;
+      localStorage.setItem('sd-msg-bookmarks', JSON.stringify(all));
+      setIsBookmarked(!isBookmarked);
+      // Notify same-tab listeners
+      window.dispatchEvent(new Event('sd-bookmark-change'));
+    } catch { /* ignore */ }
+  }, [message.id, isBookmarked]);
   const [highlightedBlocks, setHighlightedBlocks] = useState<Record<string, string>>({});
   const highlighterRef = useRef<Awaited<ReturnType<typeof import('shiki')['createHighlighter']>> | null>(null);
   const pendingLangsRef = useRef<Set<string>>(new Set());
@@ -130,6 +156,19 @@ export const MessageBubble = React.memo(function MessageBubble({ message, toolId
         }`}
       >
         {toolDot}
+
+        {/* Bookmark button */}
+        <button
+          onClick={toggleBookmark}
+          className={`absolute top-1 right-7 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded ${
+            isBookmarked ? 'opacity-100 text-amber-400' : isUser ? 'hover:bg-blue-700/50 text-white/50' : 'hover:bg-white/10 text-muted-foreground'
+          }`}
+          aria-label={isBookmarked ? '取消书签' : '添加书签'}
+        >
+          <svg className="w-3.5 h-3.5" fill={isBookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
+          </svg>
+        </button>
 
         {/* Copy button */}
         <button

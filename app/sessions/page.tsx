@@ -7,10 +7,12 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Project, Session } from '@/lib/types';
 import { SessionCard } from '@/components/session-list/SessionCard';
 import { SessionDetail } from '@/components/session-detail/SessionDetail';
+import { useRealtimeWatch } from '@/hooks/useRealtimeWatch';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
+import { TokenUsageModal } from '@/components/TokenUsageModal';
 
 const fetcher = (url: string) => fetch(url).then(r => r.json());
 
@@ -43,6 +45,7 @@ const TOOL_CONFIG: Record<string, { label: string; short: string; dot: string; b
 };
 
 type ToolFilter = 'all' | 'cc' | 'codex';
+type DateFilter = 'all' | 'today' | '7d' | '30d';
 
 // ── 复制按钮 ──────────────────────────────────────────────────
 function CopyButton({ text }: { text: string }) {
@@ -82,11 +85,13 @@ function ProjectCard({
   isActive,
   onClick,
   collapsed,
+  onShowTokens,
 }: {
   project: Project;
   isActive: boolean;
   onClick: () => void;
   collapsed?: boolean;
+  onShowTokens?: () => void;
 }) {
   const cfg = TOOL_CONFIG[project.toolId];
   const [showTooltip, setShowTooltip] = useState(false);
@@ -164,7 +169,7 @@ function ProjectCard({
         {shortPath(project.path)}
       </p>
 
-      {/* 第三行：工具 badge + session 数量 */}
+      {/* 第三行：工具 badge + session 数量 + token 按钮 */}
       <div className="flex items-center gap-1.5">
         {cfg && (
           <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border ${cfg.badge}`}>
@@ -179,6 +184,15 @@ function ProjectCard({
           </svg>
           {project.sessionCount}
         </span>
+        <button
+          onClick={e => { e.stopPropagation(); onShowTokens?.(); }}
+          className="ml-auto text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+          title="Token 用量"
+        >
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+          </svg>
+        </button>
       </div>
 
       {/* Tooltip 浮层 */}
@@ -254,6 +268,7 @@ function SessionsBrowser() {
   const selectedSession = searchParams.get('s') ?? '';
 
   const [toolFilter, setToolFilter] = useState<ToolFilter>('all');
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
@@ -273,6 +288,64 @@ function SessionsBrowser() {
   // 键盘导航
   const [keyboardIndex, setKeyboardIndex] = useState<number>(-1);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // 活跃 session 跟踪 (Task B)
+  const [activeSessions, setActiveSessions] = useState<Map<string, number>>(new Map());
+
+  const handleActiveSession = useCallback((id: string) => {
+    setActiveSessions(prev => {
+      const next = new Map(prev);
+      next.set(id, Date.now());
+      return next;
+    });
+  }, []);
+
+  useRealtimeWatch(selectedSession, handleActiveSession);
+
+  // 清理超过 30s 的活跃标记
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActiveSessions(prev => {
+        const now = Date.now();
+        const next = new Map([...prev].filter(([, t]) => now - t < 30000));
+        return next.size !== prev.size ? next : prev;
+      });
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // 收藏 (Task C)
+  const [starredIds, setStarredIds] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      return new Set(JSON.parse(localStorage.getItem('sd-starred') || '[]'));
+    } catch { return new Set(); }
+  });
+  const [showOnlyStarred, setShowOnlyStarred] = useState(false);
+
+  function toggleStar(id: string) {
+    setStarredIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      localStorage.setItem('sd-starred', JSON.stringify([...next]));
+      return next;
+    });
+  }
+
+  // 对比模式：最多 2 个 session ID
+  const [compareList, setCompareList] = useState<string[]>([]);
+
+  function toggleCompare(id: string) {
+    setCompareList(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id);
+      if (prev.length >= 2) return [prev[1], id];
+      return [...prev, id];
+    });
+  }
+
+  // Token modal 状态
+  const [tokenModal, setTokenModal] = useState<{ open: boolean; sessionId?: string; projectPath?: string }>({ open: false });
 
   // 虚拟滚动
   const listRef = useRef<HTMLDivElement>(null);
@@ -308,6 +381,22 @@ function SessionsBrowser() {
   })();
   const { data: sessions, isLoading: sessionsLoading } = useSWR<Session[]>(sessionsUrl, fetcher);
 
+  // 日期过滤 (Task A)
+  const filteredSessions = (sessions ?? []).filter(s => {
+    if (dateFilter === 'all') return true;
+    const now = Date.now();
+    const t = new Date(s.lastActivity).getTime();
+    if (dateFilter === 'today') return t > new Date().setHours(0, 0, 0, 0);
+    if (dateFilter === '7d') return t > now - 7 * 86400000;
+    if (dateFilter === '30d') return t > now - 30 * 86400000;
+    return true;
+  });
+
+  // 收藏过滤 (Task C)
+  const displaySessions = showOnlyStarred
+    ? filteredSessions.filter(s => starredIds.has(s.id))
+    : filteredSessions;
+
   // 全文搜索：限定当前项目（selectedProject），无项目时全局搜
   const fulltextUrl = submittedQuery ? (() => {
     const q = new URLSearchParams({ q: submittedQuery, limit: '50' });
@@ -318,7 +407,7 @@ function SessionsBrowser() {
 
   // 虚拟滚动器
   const virtualizer = useVirtualizer({
-    count: sessions?.length ?? 0,
+    count: displaySessions.length,
     getScrollElement: () => listRef.current,
     estimateSize: () => 72,
     overscan: 5,
@@ -381,7 +470,7 @@ function SessionsBrowser() {
   // 键盘导航：sessions 变化时重置 index
   useEffect(() => {
     setKeyboardIndex(-1);
-  }, [sessions]);
+  }, [sessions, dateFilter, showOnlyStarred]);
 
   // 键盘事件监听
   useEffect(() => {
@@ -416,24 +505,24 @@ function SessionsBrowser() {
 
       // 不在输入框中时才处理方向键
       if (isInputFocused) return;
-      if (!sessions?.length) return;
+      if (!displaySessions.length) return;
 
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setKeyboardIndex(prev => Math.min(prev + 1, sessions.length - 1));
+        setKeyboardIndex(prev => Math.min(prev + 1, displaySessions.length - 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setKeyboardIndex(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'Enter') {
-        if (keyboardIndex >= 0 && keyboardIndex < sessions.length) {
-          selectSession(sessions[keyboardIndex].id);
+        if (keyboardIndex >= 0 && keyboardIndex < displaySessions.length) {
+          selectSession(displaySessions[keyboardIndex].id);
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [sessions, keyboardIndex, search, selectedSession, closeSession, selectSession]);
+  }, [displaySessions, keyboardIndex, search, selectedSession, closeSession, selectSession, submittedQuery]);
 
   // 计算当前选中项目的 session 数量
   const currentSessionCount = sessions?.length ?? 0;
@@ -499,7 +588,7 @@ function SessionsBrowser() {
               </div>
               {filteredProjects.map(project => (
                 <ProjectCard
-                  key={project.id}
+                  key={`${project.toolId}-${project.id}`}
                   project={project}
                   isActive={selectedProject === project.path}
                   onClick={() => selectProject(project.path)}
@@ -509,6 +598,25 @@ function SessionsBrowser() {
             </div>
           ) : (
             <>
+              {/* 收藏入口 */}
+              <button
+                onClick={() => setShowOnlyStarred(v => !v)}
+                className={`shrink-0 text-left px-3 py-2 border-b border-border transition-all flex items-center justify-between gap-2
+                  ${showOnlyStarred
+                    ? 'bg-amber-500/10 text-amber-400 font-medium border-l-[3px] border-l-amber-400'
+                    : 'text-muted-foreground hover:text-foreground hover:bg-accent/40 border-l-[3px] border-l-transparent'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <svg className="w-3.5 h-3.5" fill={showOnlyStarred ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.562.562 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+                  </svg>
+                  <span className="text-sm">收藏</span>
+                </div>
+                {starredIds.size > 0 && (
+                  <span className="text-[10px] text-amber-400/70 font-mono">{starredIds.size}</span>
+                )}
+              </button>
+
               {/* 全部入口 */}
               <button
                 onClick={() => selectProject('')}
@@ -550,10 +658,11 @@ function SessionsBrowser() {
                     )
                     : filteredProjects.map(project => (
                         <ProjectCard
-                          key={project.id}
+                          key={`${project.toolId}-${project.id}`}
                           project={project}
                           isActive={selectedProject === project.path}
                           onClick={() => selectProject(project.path)}
+                          onShowTokens={() => setTokenModal({ open: true, projectPath: project.path })}
                         />
                       ))}
               </div>
@@ -580,11 +689,29 @@ function SessionsBrowser() {
               {selectedProject ? (
                 <>
                   <span className="font-medium text-foreground truncate">{lastName(selectedProject)}</span>
-                  <span className="text-muted-foreground shrink-0">{currentSessionCount} sessions</span>
+                  <span className="text-muted-foreground shrink-0">{displaySessions.length} sessions</span>
                 </>
               ) : (
                 <span className="font-medium text-foreground">所有 Sessions</span>
               )}
+            </div>
+            <div className="flex items-center gap-1">
+              {(['all', 'today', '7d', '30d'] as DateFilter[]).map(f => {
+                const labels: Record<DateFilter, string> = { all: '全部', today: '今天', '7d': '7天', '30d': '30天' };
+                return (
+                  <button
+                    key={f}
+                    onClick={() => setDateFilter(f)}
+                    className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${
+                      dateFilter === f
+                        ? 'bg-emerald-500/20 text-emerald-400'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-accent/40'
+                    }`}
+                  >
+                    {labels[f]}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -691,16 +818,16 @@ function SessionsBrowser() {
                       <Skeleton className="h-3 w-1/2" />
                     </div>
                   ))
-                : !sessions?.length
+                : !displaySessions.length
                   ? (
                     <div className="px-4 py-10 text-sm text-muted-foreground text-center">
-                      {debouncedSearch ? '没有匹配的 session' : '暂无 session'}
+                      {debouncedSearch ? '没有匹配的 session' : showOnlyStarred ? '没有收藏的 session' : '暂无 session'}
                     </div>
                   )
                   : (
                     <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
                       {virtualizer.getVirtualItems().map(item => {
-                        const s = sessions![item.index];
+                        const s = displaySessions[item.index];
                         return (
                           <div
                             key={s.id}
@@ -710,6 +837,12 @@ function SessionsBrowser() {
                             <SessionCard
                               session={s}
                               isActive={s.id === selectedSession}
+                              isLive={activeSessions.has(s.id)}
+                              isStarred={starredIds.has(s.id)}
+                              isInCompare={compareList.includes(s.id)}
+                              onToggleStar={() => toggleStar(s.id)}
+                              onToggleCompare={() => toggleCompare(s.id)}
+                              onShowTokens={() => setTokenModal({ open: true, sessionId: s.id })}
                               onClick={() => selectSession(s.id)}
                             />
                           </div>
@@ -730,20 +863,53 @@ function SessionsBrowser() {
 
       {/* ══ 右栏：聊天记录 ══ */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <div className="flex flex-col h-full overflow-hidden">
-          {selectedSession
-            ? <SessionDetail sessionId={selectedSession} onClose={closeSession} />
-            : (
-              <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
-                <svg className="w-8 h-8 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                    d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                </svg>
-                <span className="text-sm">选择一个 session 查看聊天记录</span>
+        {compareList.length === 2 ? (
+          <div className="flex flex-col h-full overflow-hidden">
+            {/* 顶部工具栏 */}
+            <div className="shrink-0 px-4 py-2 border-b border-border flex items-center justify-between bg-amber-500/5">
+              <span className="text-xs text-muted-foreground">
+                对比模式 — 选中 <span className="text-amber-400 font-medium">{compareList.length}</span> 个 session
+              </span>
+              <button
+                onClick={() => setCompareList([])}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                退出对比 ×
+              </button>
+            </div>
+            {/* 并排显示两个 SessionDetail */}
+            <div className="flex flex-1 overflow-hidden divide-x divide-border">
+              <div className="flex-1 overflow-hidden min-w-0">
+                <SessionDetail sessionId={compareList[0]} onClose={() => setCompareList(prev => prev.filter(x => x !== compareList[0]))} />
               </div>
+              <div className="flex-1 overflow-hidden min-w-0">
+                <SessionDetail sessionId={compareList[1]} onClose={() => setCompareList(prev => prev.filter(x => x !== compareList[1]))} />
+              </div>
+            </div>
+          </div>
+        ) : selectedSession ? (
+          <SessionDetail sessionId={selectedSession} onClose={closeSession} />
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+            <svg className="w-8 h-8 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+            </svg>
+            <span className="text-sm">选择一个 session 查看聊天记录</span>
+            {compareList.length === 1 && (
+              <span className="text-xs text-amber-400/70">已选 1 个对比项，再选一个开始对比</span>
             )}
-        </div>
+          </div>
+        )}
       </div>
+
+      {/* Token 用量弹窗 */}
+      <TokenUsageModal
+        open={tokenModal.open}
+        onClose={() => setTokenModal({ open: false })}
+        sessionId={tokenModal.sessionId}
+        projectPath={tokenModal.projectPath}
+      />
 
     </div>
   );

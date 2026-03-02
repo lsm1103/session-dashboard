@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageBubble } from './MessageBubble';
@@ -94,6 +94,39 @@ export function SessionDetail({ sessionId, onClose }: Props) {
     if (session) exportSessionAsMarkdown(session);
   }, [session]);
 
+  const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const all = JSON.parse(localStorage.getItem('sd-msg-bookmarks') || '{}');
+      setBookmarkedIds(all[sessionId] || []);
+    } catch { /* ignore */ }
+  }, [sessionId]);
+
+  // Listen for bookmark changes from MessageBubble
+  useEffect(() => {
+    function handleStorage() {
+      try {
+        const all = JSON.parse(localStorage.getItem('sd-msg-bookmarks') || '{}');
+        setBookmarkedIds(all[sessionId] || []);
+      } catch { /* ignore */ }
+    }
+    window.addEventListener('storage', handleStorage);
+    // Also listen for custom event for same-tab updates
+    window.addEventListener('sd-bookmark-change', handleStorage);
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('sd-bookmark-change', handleStorage);
+    };
+  }, [sessionId]);
+
+  function jumpToNextBookmark() {
+    if (!bookmarkedIds.length) return;
+    const el = scrollRef.current?.querySelector(`[data-msg-id="${bookmarkedIds[0]}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   if (isLoading) {
     return (
       <div className="flex flex-col h-full">
@@ -146,8 +179,40 @@ export function SessionDetail({ sessionId, onClose }: Props) {
           <p className="text-xs text-muted-foreground mt-0.5">
             {duration} &middot; {userCount}&uarr; {assistantCount}&darr;
           </p>
+          {/* 文件变更摘要 */}
+          {(() => {
+            const touchedFiles = (session as unknown as { touchedFiles?: string[] }).touchedFiles;
+            if (!touchedFiles || touchedFiles.length === 0) return null;
+            return (
+              <div className="flex items-start gap-1 mt-1 flex-wrap">
+                <span className="text-[10px] text-muted-foreground shrink-0 mt-0.5">涉及文件</span>
+                {touchedFiles.slice(0, 5).map((f, i) => (
+                  <span key={i} className="text-[10px] bg-accent/60 text-muted-foreground rounded px-1 font-mono truncate max-w-[120px]" title={f}>
+                    {f.split('/').pop()}
+                  </span>
+                ))}
+                {touchedFiles.length > 5 && (
+                  <span className="text-[10px] text-muted-foreground">+{touchedFiles.length - 5} 个</span>
+                )}
+              </div>
+            );
+          })()}
         </div>
         <div className="flex items-center gap-1 shrink-0 mt-0.5">
+          <button
+            onClick={jumpToNextBookmark}
+            disabled={bookmarkedIds.length === 0}
+            className={`p-1 rounded transition-colors ${
+              bookmarkedIds.length > 0
+                ? 'text-amber-400 hover:bg-accent/50'
+                : 'text-muted-foreground/30 cursor-not-allowed'
+            }`}
+            title={bookmarkedIds.length > 0 ? `跳转到书签 (${bookmarkedIds.length})` : '无书签'}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
+            </svg>
+          </button>
           <button
             onClick={handleExport}
             className="text-muted-foreground hover:text-foreground p-1"
@@ -188,7 +253,9 @@ export function SessionDetail({ sessionId, onClose }: Props) {
                 <div className="flex-1 h-px bg-border/50" />
               </div>
               {group.messages.map(msg => (
-                <MessageBubble key={msg.id} message={msg} toolId={session.toolId} />
+                <div key={msg.id} data-msg-id={msg.id}>
+                  <MessageBubble message={msg} toolId={session.toolId} />
+                </div>
               ))}
             </div>
           ))

@@ -1,7 +1,10 @@
 import { useEffect } from 'react';
 import { useSWRConfig } from 'swr';
 
-export function useRealtimeWatch(currentSessionId?: string) {
+export function useRealtimeWatch(
+  currentSessionId?: string,
+  onActiveSession?: (sessionId: string) => void
+) {
   const { mutate } = useSWRConfig();
 
   useEffect(() => {
@@ -25,6 +28,16 @@ export function useRealtimeWatch(currentSessionId?: string) {
               mutate(`/api/sessions/${currentSessionId}`);
             }
           }
+
+          // Notify caller about active session
+          if (data.event === 'updated' && onActiveSession) {
+            const pathStr = String(data.path || '');
+            const match = pathStr.match(/([a-f0-9-]{36})\.jsonl$/i);
+            if (match) {
+              const prefix = data.toolId === 'claude-code' ? 'cc' : 'cdx';
+              onActiveSession(`${prefix}-${match[1]}`);
+            }
+          }
         }
       } catch {
         // ignore parse errors
@@ -36,5 +49,5 @@ export function useRealtimeWatch(currentSessionId?: string) {
     };
 
     return () => es.close();
-  }, [mutate, currentSessionId]);
+  }, [mutate, currentSessionId, onActiveSession]);
 }

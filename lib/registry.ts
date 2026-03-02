@@ -1,9 +1,16 @@
 import { ClaudeCodeAdapter } from './adapters/claude-code';
 import { CodexAdapter } from './adapters/codex';
+import { CursorAdapter } from './adapters/cursor';
+import { AiderAdapter } from './adapters/aider';
 import type { ISessionAdapter, Project, Session } from './types';
 
 function getAdapters(): ISessionAdapter[] {
-  return [new ClaudeCodeAdapter(), new CodexAdapter()];
+  return [
+    new ClaudeCodeAdapter(),
+    new CodexAdapter(),
+    new CursorAdapter(),
+    new AiderAdapter(),
+  ];
 }
 
 async function getAllProjects(): Promise<Project[]> {

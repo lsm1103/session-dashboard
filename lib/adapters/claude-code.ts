@@ -67,6 +67,7 @@ async function parseSessionFile(filePath: string): Promise<{
   lastActivity: Date;
   messages: Message[];
   title: string;
+  touchedFiles: string[];
 } | null> {
   // Check cache by file mtime
   try {
@@ -92,6 +93,8 @@ async function parseSessionFile(filePath: string): Promise<{
   let lastActivity: Date | null = null;
   const messages: Message[] = [];
   let title = '';
+  const touchedFilesSet = new Set<string>();
+  const touchedFilesOrder: string[] = [];
 
   const SKIP_TYPES = new Set([
     'progress', 'file-history-snapshot', 'system',
@@ -129,6 +132,34 @@ async function parseSessionFile(filePath: string): Promise<{
       }
       // 截断超长输入
       if (inputStr.length > 800) inputStr = inputStr.slice(0, 800) + '\n...';
+
+      // Extract file paths from tool input
+      const inputObj = input as Record<string, unknown> | undefined;
+      if (inputObj) {
+        let filePath: string | undefined;
+        if ((toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') && typeof inputObj.file_path === 'string') {
+          filePath = inputObj.file_path;
+        } else if ((toolName === 'Glob' || toolName === 'Grep') && typeof inputObj.path === 'string') {
+          filePath = inputObj.path;
+        } else if (toolName === 'Bash' && typeof inputObj.command === 'string') {
+          // Extract paths from bash commands: quoted paths or absolute paths
+          const cmd = inputObj.command;
+          const pathMatches = cmd.match(/(?:["'])(\/[^"']+)(?:["'])|(?:^|\s)(\/\S+)/g);
+          if (pathMatches) {
+            for (const m of pathMatches) {
+              const cleaned = m.trim().replace(/^["']|["']$/g, '');
+              if (cleaned.startsWith('/') && !touchedFilesSet.has(cleaned)) {
+                touchedFilesSet.add(cleaned);
+                touchedFilesOrder.push(cleaned);
+              }
+            }
+          }
+        }
+        if (filePath && !touchedFilesSet.has(filePath)) {
+          touchedFilesSet.add(filePath);
+          touchedFilesOrder.push(filePath);
+        }
+      }
 
       const msgId = `${sessionId}-tu-${messages.length}`;
       messages.push({
@@ -217,6 +248,7 @@ async function parseSessionFile(filePath: string): Promise<{
     lastActivity: lastActivity || new Date(fs.statSync(filePath).mtime),
     messages,
     title: title || 'Untitled session',
+    touchedFiles: touchedFilesOrder.slice(0, 20),
   };
 
   // Store in cache
@@ -394,6 +426,18 @@ export class ClaudeCodeAdapter implements ISessionAdapter {
       return !(msg.role === prev.role && msg.content === prev.content);
     });
 
+    // Merge touchedFiles from all parsed files, preserving order and deduplicating
+    const mergedTouchedFilesSet = new Set<string>();
+    const mergedTouchedFiles: string[] = [];
+    for (const p of allParsed) {
+      for (const f of p.touchedFiles) {
+        if (!mergedTouchedFilesSet.has(f)) {
+          mergedTouchedFilesSet.add(f);
+          mergedTouchedFiles.push(f);
+        }
+      }
+    }
+
     return {
       id,
       toolId: 'claude-code',
@@ -403,6 +447,7 @@ export class ClaudeCodeAdapter implements ISessionAdapter {
       startTime: allParsed[allParsed.length - 1].startTime,
       lastActivity: best.lastActivity,
       messages: dedupedMessages,
-    };
+      touchedFiles: mergedTouchedFiles.slice(0, 20),
+    } as SessionDetail & { touchedFiles: string[] };
   }
 }

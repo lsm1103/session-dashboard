@@ -15,6 +15,10 @@ export async function GET(
       adapter = adapters.find(a => a.toolId === 'claude-code');
     } else if (id.startsWith('cdx-')) {
       adapter = adapters.find(a => a.toolId === 'codex');
+    } else if (id.startsWith('csr-')) {
+      adapter = adapters.find(a => a.toolId === 'cursor');
+    } else if (id.startsWith('adr-')) {
+      adapter = adapters.find(a => a.toolId === 'aider');
     }
 
     if (!adapter) {
