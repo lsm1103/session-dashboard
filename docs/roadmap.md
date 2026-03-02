@@ -70,4 +70,4 @@
 | ✅ | React.memo for MessageBubble | `MessageBubble.tsx` |
 | ✅ | 拖拽宽度持久化 | `app/sessions/page.tsx` |
 | ✅ | JSON 本地索引层 | ~/.session-dashboard/index.json；mtime 增量更新；POST /api/index/rebuild 强制重建 |
-| ⏳ | Session ID 去重合并策略 | `lib/registry.ts` |
+| ✅ | Session ID 去重合并策略 | `getSessions()` 按 lastActivity 去重，`getSession()` 合并多文件消息 |
