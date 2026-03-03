@@ -44,6 +44,24 @@ npm run dev
 
 打开 [http://localhost:3000](http://localhost:3000)
 
+### 全局安装（npm）
+
+```bash
+# 全局安装
+npm install -g session-dashboard
+
+# 直接启动 Dashboard
+session-dashboard
+```
+
+默认会在包目录中启动 Next.js 开发服务器（等价于运行 `next dev`）。你也可以透传 Next.js 参数，例如 `session-dashboard --port 4000`。
+
+### 发布流程
+
+- 本地 `git push` 前会通过 Husky 自动执行 `npm run typecheck`
+- 创建 GitHub Release 或推送 `v*` tag 时，GitHub Actions 会执行 `npm ci`、`npm run release:check` 并自动发布到 npm
+- 发布前请在仓库 Secrets 中配置 `NPM_TOKEN`
+
 ---
 
 ## 目录结构
@@ -147,9 +165,11 @@ session-dashboard/
 | AI 原生增强 | AI 生成 session 摘要、自动工作日报 / 周报、Session 复盘助手、下一步行动建议 | 从“展示历史”升级到“主动总结和建议” |
 | 分析增强 | Session 叙事时间线、个人 AI 开发画像、效率信号面板、调试路径回放 | 从“查看记录”升级到“理解工作模式和效率” |
 | 协作展示 | 项目演进故事板、可分享的只读快照、团队维度看板、Demo / 展览模式 | 从“个人本地工具”升级到“可汇报、可分享的协作资产” |
+| 工程化与分发 | 发布前 TypeScript 守门、GitHub Actions 自动发布 npm、全局 CLI 启动入口 | 从“本地项目”升级到“可安装、可发布、可直接运行”的产品形态 |
 
 推荐优先级：
 
 1. 先做 **自动工作日报 / 周报** 和 **个人 AI 开发画像**，最快提升日常打开价值
 2. 再做 **Session 叙事时间线** 和 **Session 复盘助手**，拉开产品差异化
-3. 最后做 **项目演进故事板** 和 **可分享的只读快照**，强化展示与协作能力
+3. 补上 **发布前 tsc 校验**、**GitHub Actions 自动发布 npm** 和 **`session-dashboard` 命令启动**，降低分发和使用门槛
+4. 最后做 **项目演进故事板** 和 **可分享的只读快照**，强化展示与协作能力

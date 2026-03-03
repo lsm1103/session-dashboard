@@ -58,6 +58,7 @@
 | M3 | **Aider 适配器** | ✅ | 扫描常见开发目录 .aider.chat.history.md，解析 #### human/ai，前缀 adr- |
 | M4 | **消息级别书签** | ✅ | localStorage sd-msg-bookmarks；气泡 hover 书签按钮；SessionDetail 跳转入口 |
 | M5 | **AI 生成 session 摘要** | ⏳ | 需要 ANTHROPIC_API_KEY；/api/summarize/[id]；结果缓存本地 JSON |
+| M6 | **工程化发布链路（tsc + npm 发布）** | 📝 | `git push` 前执行 TypeScript 校验；通过 GitHub Actions 自动构建 release 并发布到 npm；安装后可直接用 `session-dashboard` 命令启动 |
 
 ### 第三批：想象力功能（提升产品辨识度）
 
@@ -95,6 +96,14 @@
 | 近期 | **自动工作日报 / 周报**、**个人 AI 开发画像** | 最容易建立“每天都值得打开”的使用价值，且可复用现有 session / token / 项目聚合能力 |
 | 中期 | **Session 叙事时间线**、**Session 复盘助手** | 明显提升智能感与产品差异化，让 Dashboard 从记录器升级为复盘工具 |
 | 远期 | **项目演进故事板**、**可分享的只读快照** | 强化对外展示与协作能力，更适合成为大版本亮点功能 |
+
+### 工程化与分发（支撑更广泛使用）
+
+| # | 功能 | 状态 | 说明 |
+|---|------|------|------|
+| E1 | **发布前 TypeScript 守门** | 📝 | 在 `git push` 前通过 hook 强制执行 `tsc --noEmit`，避免未通过类型检查的改动进入远端 |
+| E2 | **GitHub Actions 自动发布 npm** | 📝 | 基于 tag 或 release 触发 CI，执行安装、测试、构建、打包并发布到 npm 仓库 |
+| E3 | **全局 CLI 启动入口** | 📝 | 提供 npm package 的 `bin` 命令，安装后可直接运行 `session-dashboard` 启动本地服务或打开 UI |
 
 ---
 

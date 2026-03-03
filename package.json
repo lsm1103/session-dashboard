@@ -1,12 +1,40 @@
 {
   "name": "session-dashboard",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "description": "Browse and monitor local AI coding sessions in a Next.js dashboard.",
+  "bin": {
+    "session-dashboard": "./scripts/session-dashboard.cjs"
+  },
+  "files": [
+    "app",
+    "components",
+    "hooks",
+    "lib",
+    "public",
+    "scripts",
+    "README.md",
+    "next-env.d.ts",
+    "next.config.ts",
+    "postcss.config.mjs",
+    "components.json",
+    "tsconfig.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky",
+    "release:check": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.19",
@@ -35,6 +63,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "husky": "^9.1.7",
     "shadcn": "^3.8.5",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.4.0",
