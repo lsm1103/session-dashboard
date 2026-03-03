@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageBubble } from './MessageBubble';
+import { DebugPathReplay } from './DebugPathReplay';
+import { NarrativeTimeline } from './NarrativeTimeline';
+import { SessionEfficiencyPanel } from './SessionEfficiencyPanel';
 import { useSession } from '@/hooks/useSession';
 import type { SessionDetail as SessionDetailType, Message } from '@/lib/types';
 
@@ -95,6 +98,7 @@ export function SessionDetail({ sessionId, onClose }: Props) {
   }, [session]);
 
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
+  const [showAnalysis, setShowAnalysis] = useState(true);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -181,7 +185,7 @@ export function SessionDetail({ sessionId, onClose }: Props) {
           </p>
           {/* 文件变更摘要 */}
           {(() => {
-            const touchedFiles = (session as unknown as { touchedFiles?: string[] }).touchedFiles;
+            const touchedFiles = session.touchedFiles;
             if (!touchedFiles || touchedFiles.length === 0) return null;
             return (
               <div className="flex items-start gap-1 mt-1 flex-wrap">
@@ -234,6 +238,35 @@ export function SessionDetail({ sessionId, onClose }: Props) {
           )}
         </div>
       </div>
+
+      {session.analysis && (
+        <div className="shrink-0 border-b border-border px-4 py-3 bg-background/40">
+          <button
+            onClick={() => setShowAnalysis(value => !value)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <div>
+              <p className="text-sm font-medium">分析增强</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                叙事时间线、效率信号与调试路径回放
+              </p>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {showAnalysis ? '收起' : '展开'}
+            </span>
+          </button>
+          {showAnalysis && (
+            <div className="grid gap-3 mt-3">
+              <NarrativeTimeline timeline={session.analysis.timeline} />
+              <SessionEfficiencyPanel
+                efficiency={session.analysis.efficiency}
+                workflowStyle={session.analysis.workflowStyle}
+              />
+              <DebugPathReplay debugPath={session.analysis.debugPath} />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 消息区域 */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">

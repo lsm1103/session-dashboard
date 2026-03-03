@@ -1,6 +1,7 @@
 'use client';
 import useSWR from 'swr';
 import { Skeleton } from '@/components/ui/skeleton';
+import { getProjectListKey } from '@/lib/utils';
 import type { Project } from '@/lib/types';
 
 const fetcher = (url: string) => fetch(url).then(r => r.json());
@@ -25,10 +26,10 @@ export function TopProjects() {
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <p className="text-xs text-muted-foreground mb-3">最活跃项目 Top 5</p>
+        <p className="text-xs text-muted-foreground mb-3">最活跃项目 Top 5</p>
       <div className="space-y-2.5">
         {top5.map(p => (
-          <div key={p.id}>
+          <div key={getProjectListKey(p)}>
             <div className="flex items-center justify-between text-xs mb-1">
               <span className="truncate text-foreground/80 max-w-[80%]" title={p.path}>
                 {shortPath(p.path).split('/').pop()}

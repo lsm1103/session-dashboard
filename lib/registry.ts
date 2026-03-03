@@ -2,7 +2,7 @@ import { ClaudeCodeAdapter } from './adapters/claude-code';
 import { CodexAdapter } from './adapters/codex';
 import { CursorAdapter } from './adapters/cursor';
 import { AiderAdapter } from './adapters/aider';
-import type { ISessionAdapter, Project, Session } from './types';
+import type { ISessionAdapter, Project, Session, SessionDetail } from './types';
 
 function getAdapters(): ISessionAdapter[] {
   return [
@@ -61,4 +61,30 @@ async function getAllSessions(opts?: {
   return sessions.slice(offset, offset + limit);
 }
 
-export { getAdapters, getAllProjects, getAllSessions };
+async function getSessionById(id: string): Promise<SessionDetail> {
+  const adapters = getAdapters();
+
+  if (id.startsWith('cc-')) {
+    const adapter = adapters.find(a => a.toolId === 'claude-code');
+    if (adapter) return adapter.getSession(id);
+  }
+
+  if (id.startsWith('cdx-')) {
+    const adapter = adapters.find(a => a.toolId === 'codex');
+    if (adapter) return adapter.getSession(id);
+  }
+
+  if (id.startsWith('csr-')) {
+    const adapter = adapters.find(a => a.toolId === 'cursor');
+    if (adapter) return adapter.getSession(id);
+  }
+
+  if (id.startsWith('adr-')) {
+    const adapter = adapters.find(a => a.toolId === 'aider');
+    if (adapter) return adapter.getSession(id);
+  }
+
+  throw new Error('Unknown session type');
+}
+
+export { getAdapters, getAllProjects, getAllSessions, getSessionById };

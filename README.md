@@ -22,7 +22,7 @@
 
 | 层 | 技术 |
 |----|------|
-| 框架 | Next.js v22.22.0 (App Router) + TypeScript |
+| 框架 | Node v22.22.0 Next.js 16.1.6 (App Router) + TypeScript |
 | 样式 | Tailwind CSS v4 + shadcn/ui |
 | 数据获取 | SWR + SSE (chokidar) |
 | 代码高亮 | Shiki |

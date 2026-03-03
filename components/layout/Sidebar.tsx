@@ -6,6 +6,7 @@ import useSWR from 'swr';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { getProjectListKey } from '@/lib/utils';
 import type { Project } from '@/lib/types';
 
 const fetcher = (url: string) => fetch(url).then(r => r.json());
@@ -85,7 +86,7 @@ export function Sidebar() {
             </div>
             {toolProjects.map(project => (
               <Link
-                key={project.id}
+                key={getProjectListKey(project)}
                 href={`/sessions?projectPath=${encodeURIComponent(project.path)}&toolId=${project.toolId}`}
                 className="flex items-center justify-between px-2 py-1.5 rounded text-xs transition-colors text-muted-foreground hover:text-foreground hover:bg-accent/50 group"
               >

@@ -1,6 +1,6 @@
 {
   "name": "session-dashboard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "Browse and monitor local AI coding sessions in a Next.js dashboard.",
   "bin": {
@@ -31,7 +31,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test",
+    "test": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test",
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
     "release:check": "npm run typecheck && npm run test && npm run build"

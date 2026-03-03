@@ -1,9 +1,8 @@
 'use client';
 
 import useSWR from 'swr';
-import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { Session } from '@/lib/types';
+import type { AnalysisOverview, Session } from '@/lib/types';
 
 const fetcher = (url: string) => fetch(url).then(r => r.json());
 
@@ -12,7 +11,15 @@ interface Stats {
   totalProjects: number;
   perTool: { toolId: string; count: number }[];
   recentActivity: Session[];
+  analysisOverview?: AnalysisOverview;
 }
+
+const TOOL_LABELS: Record<string, string> = {
+  'claude-code': 'Claude Code Sessions',
+  codex: 'Codex Sessions',
+  cursor: 'Cursor Sessions',
+  aider: 'Aider Sessions',
+};
 
 function StatCard({ label, value }: { label: string; value: number | string }) {
   return (
@@ -65,7 +72,7 @@ export function StatsPanel() {
         {stats.perTool.map(({ toolId, count }) => (
           <StatCard
             key={toolId}
-            label={toolId === 'claude-code' ? 'Claude Code Sessions' : 'Codex Sessions'}
+            label={TOOL_LABELS[toolId] ?? `${toolId} Sessions`}
             value={count}
           />
         ))}
