@@ -6,6 +6,39 @@ import { Copy, Check } from 'lucide-react';
 import type { Message } from '@/lib/types';
 import { ToolUseBlock, ToolResultBlock } from './ToolCallBlock';
 
+type ShikiHighlighter = Awaited<ReturnType<typeof import('shiki')['createHighlighter']>>;
+type IdleCancel = () => void;
+
+let sharedHighlighterPromise: Promise<ShikiHighlighter> | null = null;
+const loadedLangs = new Set<string>();
+const highlightedCodeCache = new Map<string, string>();
+
+function scheduleIdle(callback: () => void): IdleCancel {
+  if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+    const id = window.requestIdleCallback(callback);
+    return () => window.cancelIdleCallback(id);
+  }
+
+  const id = globalThis.setTimeout(callback, 0);
+  return () => globalThis.clearTimeout(id);
+}
+
+async function getSharedHighlighter(initialLangs: string[]): Promise<ShikiHighlighter> {
+  if (!sharedHighlighterPromise) {
+    sharedHighlighterPromise = (async () => {
+      const { createHighlighter } = await import('shiki');
+      const uniqueLangs = [...new Set(initialLangs)];
+      uniqueLangs.forEach(lang => loadedLangs.add(lang));
+      return createHighlighter({
+        themes: ['github-dark'],
+        langs: uniqueLangs,
+      });
+    })();
+  }
+
+  return sharedHighlighterPromise;
+}
+
 interface Props {
   message: Message;
   toolId?: string;
@@ -44,12 +77,12 @@ export const MessageBubble = React.memo(function MessageBubble({ message, toolId
     } catch { /* ignore */ }
   }, [message.id, isBookmarked]);
   const [highlightedBlocks, setHighlightedBlocks] = useState<Record<string, string>>({});
-  const highlighterRef = useRef<Awaited<ReturnType<typeof import('shiki')['createHighlighter']>> | null>(null);
-  const pendingLangsRef = useRef<Set<string>>(new Set());
+  const idleCancelRef = useRef<IdleCancel | null>(null);
 
   // Initialize shiki highlighter and process code blocks
   useEffect(() => {
     let cancelled = false;
+    idleCancelRef.current?.();
 
     // Extract languages from markdown content
     const langMatches = message.content.matchAll(/```(\w+)\n([\s\S]*?)```/g);
@@ -63,47 +96,61 @@ export const MessageBubble = React.memo(function MessageBubble({ message, toolId
 
     if (blocks.length === 0) return;
 
-    (async () => {
-      try {
-        if (!highlighterRef.current) {
-          const { createHighlighter } = await import('shiki');
-          const langs = [...new Set(blocks.map(b => b.lang))];
-          highlighterRef.current = await createHighlighter({
-            themes: ['github-dark'],
-            langs,
-          });
-          langs.forEach(l => pendingLangsRef.current.add(l));
-        }
-
-        const highlighter = highlighterRef.current;
-        const results: Record<string, string> = {};
-
-        for (const block of blocks) {
-          if (cancelled) return;
-          try {
-            // Load language if not yet loaded
-            if (!pendingLangsRef.current.has(block.lang)) {
-              await highlighter.loadLanguage(block.lang as never);
-              pendingLangsRef.current.add(block.lang);
-            }
-            results[block.key] = highlighter.codeToHtml(block.code, {
-              lang: block.lang,
-              theme: 'github-dark',
-            });
-          } catch {
-            // Language not supported, skip
-          }
-        }
-
-        if (!cancelled && Object.keys(results).length > 0) {
-          setHighlightedBlocks(prev => ({ ...prev, ...results }));
-        }
-      } catch {
-        // shiki failed to load, keep fallback
+    const cachedResults: Record<string, string> = {};
+    const pendingBlocks = blocks.filter(block => {
+      const html = highlightedCodeCache.get(block.key);
+      if (html) {
+        cachedResults[block.key] = html;
+        return false;
       }
-    })();
+      return true;
+    });
 
-    return () => { cancelled = true; };
+    if (Object.keys(cachedResults).length > 0) {
+      setHighlightedBlocks(prev => ({ ...prev, ...cachedResults }));
+    }
+
+    if (pendingBlocks.length === 0) return;
+
+    idleCancelRef.current = scheduleIdle(() => {
+      (async () => {
+        try {
+          const highlighter = await getSharedHighlighter(pendingBlocks.map(block => block.lang));
+          const results: Record<string, string> = {};
+
+          for (const block of pendingBlocks) {
+            if (cancelled) return;
+            try {
+              if (!loadedLangs.has(block.lang)) {
+                await highlighter.loadLanguage(block.lang as never);
+                loadedLangs.add(block.lang);
+              }
+
+              const html = highlighter.codeToHtml(block.code, {
+                lang: block.lang,
+                theme: 'github-dark',
+              });
+              highlightedCodeCache.set(block.key, html);
+              results[block.key] = html;
+            } catch {
+              // unsupported language, keep plain rendering
+            }
+          }
+
+          if (!cancelled && Object.keys(results).length > 0) {
+            setHighlightedBlocks(prev => ({ ...prev, ...results }));
+          }
+        } catch {
+          // shiki failed to load, keep fallback
+        }
+      })();
+    });
+
+    return () => {
+      cancelled = true;
+      idleCancelRef.current?.();
+      idleCancelRef.current = null;
+    };
   }, [message.content]);
 
   const handleCopy = useCallback(async () => {

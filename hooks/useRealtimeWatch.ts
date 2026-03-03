@@ -1,11 +1,17 @@
 import { useEffect } from 'react';
 import { useSWRConfig } from 'swr';
 
+interface RealtimeWatchOptions {
+  includeStats?: boolean;
+}
+
 export function useRealtimeWatch(
   currentSessionId?: string,
-  onActiveSession?: (sessionId: string) => void
+  onActiveSession?: (sessionId: string) => void,
+  options: RealtimeWatchOptions = {}
 ) {
   const { mutate } = useSWRConfig();
+  const includeStats = options.includeStats ?? false;
 
   useEffect(() => {
     const es = new EventSource('/api/watch');
@@ -18,7 +24,7 @@ export function useRealtimeWatch(
           mutate((key: unknown) => typeof key === 'string' && (
             key.startsWith('/api/sessions') ||
             key.startsWith('/api/projects') ||
-            key.startsWith('/api/stats')
+            (includeStats && key.startsWith('/api/stats'))
           ));
 
           // If the current open session's file changed, refresh it precisely
@@ -49,5 +55,5 @@ export function useRealtimeWatch(
     };
 
     return () => es.close();
-  }, [mutate, currentSessionId, onActiveSession]);
+  }, [mutate, currentSessionId, onActiveSession, includeStats]);
 }

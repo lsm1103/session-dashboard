@@ -43,6 +43,7 @@ const WORKFLOW_PRIORITY: WorkflowStyle[] = [
   'refactor-focused',
   'finisher',
 ];
+const analysisCache = new Map<string, SessionAnalysis>();
 
 function includesAny(content: string, keywords: string[]) {
   return keywords.some(keyword => content.includes(keyword));
@@ -246,6 +247,12 @@ function average(values: number[]) {
 }
 
 export function analyzeSession(session: SessionDetail): SessionAnalysis {
+  const cacheKey = `${session.id}:${new Date(session.lastActivity).toISOString()}`;
+  const cached = analysisCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const timeline = buildTimeline(session.messages);
   const debugEvents = extractActions(session.messages);
   const durationMinutes = Math.max(
@@ -274,7 +281,7 @@ export function analyzeSession(session: SessionDetail): SessionAnalysis {
     highFriction: errorCount > 0 && retryCount > 0,
   };
 
-  return {
+  const result: SessionAnalysis = {
     toolId: session.toolId,
     timeline,
     debugPath: {
@@ -284,6 +291,16 @@ export function analyzeSession(session: SessionDetail): SessionAnalysis {
     efficiency,
     workflowStyle: deriveWorkflowStyle(timeline, efficiency),
   };
+
+  if (analysisCache.size > 500) {
+    const firstKey = analysisCache.keys().next().value;
+    if (firstKey) {
+      analysisCache.delete(firstKey);
+    }
+  }
+
+  analysisCache.set(cacheKey, result);
+  return result;
 }
 
 export function buildAnalysisOverview(analyses: SessionAnalysis[]): AnalysisOverview {

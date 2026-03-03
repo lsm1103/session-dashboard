@@ -37,7 +37,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test",
-    "typecheck": "next typegen && tsc --noEmit --incremental false",
+    "typecheck": "./node_modules/.bin/tsc -p tsconfig.typecheck.json --noEmit --incremental false",
     "prepare": "husky",
     "release:check": "npm run typecheck && npm run test && npm run build"
   },

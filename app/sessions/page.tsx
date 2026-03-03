@@ -300,7 +300,7 @@ function SessionsBrowser() {
     });
   }, []);
 
-  useRealtimeWatch(selectedSession, handleActiveSession);
+  useRealtimeWatch(selectedSession, handleActiveSession, { includeStats: false });
 
   // 清理超过 30s 的活跃标记
   useEffect(() => {

@@ -7,6 +7,12 @@ import { MessageBubble } from './MessageBubble';
 import { DebugPathReplay } from './DebugPathReplay';
 import { NarrativeTimeline } from './NarrativeTimeline';
 import { SessionEfficiencyPanel } from './SessionEfficiencyPanel';
+import {
+  DEFAULT_MESSAGE_CHUNK_SIZE,
+  getInitialVisibleMessageCount,
+  getNextVisibleMessageCount,
+  getVisibleMessages,
+} from '@/lib/session-view';
 import { useSession } from '@/hooks/useSession';
 import type { SessionDetail as SessionDetailType, Message } from '@/lib/types';
 
@@ -99,6 +105,12 @@ export function SessionDetail({ sessionId, onClose }: Props) {
 
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
   const [showAnalysis, setShowAnalysis] = useState(true);
+  const [visibleMessageCount, setVisibleMessageCount] = useState(DEFAULT_MESSAGE_CHUNK_SIZE);
+
+  useEffect(() => {
+    if (!session) return;
+    setVisibleMessageCount(getInitialVisibleMessageCount(session.messages.length));
+  }, [session?.id, session?.messages.length, session]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -127,7 +139,19 @@ export function SessionDetail({ sessionId, onClose }: Props) {
 
   function jumpToNextBookmark() {
     if (!bookmarkedIds.length) return;
-    const el = scrollRef.current?.querySelector(`[data-msg-id="${bookmarkedIds[0]}"]`);
+    const targetId = bookmarkedIds[0];
+    const visibleIds = new Set(visibleMessages.map(message => message.id));
+
+    if (!visibleIds.has(targetId) && session) {
+      setVisibleMessageCount(session.messages.length);
+      requestAnimationFrame(() => {
+        const el = scrollRef.current?.querySelector(`[data-msg-id="${targetId}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      return;
+    }
+
+    const el = scrollRef.current?.querySelector(`[data-msg-id="${targetId}"]`);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
@@ -161,7 +185,9 @@ export function SessionDetail({ sessionId, onClose }: Props) {
   const userCount = session.messages.filter(m => m.role === 'user').length;
   const assistantCount = session.messages.filter(m => m.role === 'assistant').length;
   const duration = formatDuration(session.startTime, session.lastActivity);
-  const dateGroups = groupMessagesByDate(session.messages);
+  const visibleMessages = getVisibleMessages(session.messages, visibleMessageCount);
+  const dateGroups = groupMessagesByDate(visibleMessages);
+  const hiddenMessageCount = Math.max(0, session.messages.length - visibleMessageCount);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -256,7 +282,7 @@ export function SessionDetail({ sessionId, onClose }: Props) {
             </span>
           </button>
           {showAnalysis && (
-            <div className="grid gap-3 mt-3">
+            <div className="grid gap-3 mt-3 max-h-[60vh] overflow-y-auto pr-1">
               <NarrativeTimeline timeline={session.analysis.timeline} />
               <SessionEfficiencyPanel
                 efficiency={session.analysis.efficiency}
@@ -270,6 +296,16 @@ export function SessionDetail({ sessionId, onClose }: Props) {
 
       {/* 消息区域 */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+        {hiddenMessageCount > 0 && (
+          <div className="mb-4">
+            <button
+              onClick={() => setVisibleMessageCount(current => getNextVisibleMessageCount(current, session.messages.length))}
+              className="w-full rounded-lg border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+            >
+              加载更早消息（还有 {hiddenMessageCount} 条）
+            </button>
+          </div>
+        )}
         {session.messages.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
             <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">

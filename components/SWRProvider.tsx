@@ -1,17 +1,20 @@
 'use client';
 
 import { SWRConfig } from 'swr';
+import { usePathname } from 'next/navigation';
 import { useRealtimeWatch } from '@/hooks/useRealtimeWatch';
 
 function RealtimeWatcher() {
-  useRealtimeWatch();
+  useRealtimeWatch(undefined, undefined, { includeStats: true });
   return null;
 }
 
 export function SWRProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+
   return (
     <SWRConfig value={{ revalidateOnFocus: false }}>
-      <RealtimeWatcher />
+      {pathname === '/' ? <RealtimeWatcher /> : null}
       {children}
     </SWRConfig>
   );

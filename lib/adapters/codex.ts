@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import os from 'os';
+import { findIndexedFilePathBySessionId } from '../index-lookup';
 import type { ISessionAdapter, Project, Session, SessionDetail, Message } from '../types';
 
 const BASE_PATH = path.join(os.homedir(), '.codex', 'sessions');
@@ -36,6 +37,9 @@ interface CodexSessionMeta {
   git?: unknown;
 }
 
+type ParsedCodexSession = NonNullable<Awaited<ReturnType<typeof parseCodexFile>>>;
+const parseCache = new Map<string, { mtime: number; result: ParsedCodexSession }>();
+
 async function parseCodexFile(filePath: string): Promise<{
   sessionId: string;
   cwd: string;
@@ -44,6 +48,16 @@ async function parseCodexFile(filePath: string): Promise<{
   messages: Message[];
   title: string;
 } | null> {
+  try {
+    const mtime = fs.statSync(filePath).mtimeMs;
+    const cached = parseCache.get(filePath);
+    if (cached && cached.mtime === mtime) {
+      return cached.result;
+    }
+  } catch {
+    return null;
+  }
+
   let lines: string[];
   try {
     lines = await readLines(filePath);
@@ -196,7 +210,7 @@ async function parseCodexFile(filePath: string): Promise<{
 
   const startTime = new Date(meta.timestamp);
 
-  return {
+  const result = {
     sessionId: meta.id,
     cwd: meta.cwd,
     startTime,
@@ -204,6 +218,15 @@ async function parseCodexFile(filePath: string): Promise<{
     messages,
     title: title || 'Untitled session',
   };
+
+  try {
+    const mtime = fs.statSync(filePath).mtimeMs;
+    parseCache.set(filePath, { mtime, result });
+  } catch {
+    // ignore cache write failures
+  }
+
+  return result;
 }
 
 function getAllJsonlFiles(basePath: string): string[] {
@@ -289,6 +312,23 @@ export class CodexAdapter implements ISessionAdapter {
 
   async getSession(id: string): Promise<SessionDetail> {
     const sessionId = id.replace(/^cdx-/, '');
+    const indexedFilePath = findIndexedFilePathBySessionId(id);
+    if (indexedFilePath && indexedFilePath.startsWith(BASE_PATH) && fs.existsSync(indexedFilePath)) {
+      const parsed = await parseCodexFile(indexedFilePath);
+      if (parsed && parsed.sessionId === sessionId) {
+        return {
+          id,
+          toolId: 'codex',
+          projectPath: parsed.cwd,
+          title: parsed.title,
+          messageCount: parsed.messages.length,
+          startTime: parsed.startTime,
+          lastActivity: parsed.lastActivity,
+          messages: parsed.messages,
+        };
+      }
+    }
+
     const files = getAllJsonlFiles(BASE_PATH);
 
     for (const file of files) {
