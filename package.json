@@ -1,6 +1,14 @@
 {
   "name": "session-dashboard",
   "version": "0.1.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lsm1103/session-dashboard.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "private": false,
   "description": "Browse and monitor local AI coding sessions in a Next.js dashboard.",
   "bin": {
@@ -22,9 +30,6 @@
   ],
   "engines": {
     "node": ">=22"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "dev": "next dev",
