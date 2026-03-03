@@ -1,9 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { LruCache } from '../lru-cache';
 import type { ISessionAdapter, Project, Session, SessionDetail, Message } from '../types';
 
 const HISTORY_FILE = '.aider.chat.history.md';
+const AIDER_FILE_LIST_TTL_MS = 30_000;
+const AIDER_PARSE_CACHE_LIMIT = 128;
+let aiderFilesCache: { expiresAt: number; files: string[] } | null = null;
 
 // 扫描常见目录（最多 4 层深）查找 .aider.chat.history.md
 function findAiderFiles(baseDir: string, maxDepth = 4): string[] {
@@ -30,6 +34,49 @@ function findAiderFiles(baseDir: string, maxDepth = 4): string[] {
   return results;
 }
 
+type ParsedAiderSession = {
+  id: string;
+  cwd: string;
+  title: string;
+  messages: Message[];
+  startTime: Date;
+  lastActivity: Date;
+};
+
+const aiderParseCache = new LruCache<string, { mtime: number; result: ParsedAiderSession | null }>(AIDER_PARSE_CACHE_LIMIT);
+
+function getCachedAiderFiles(): string[] {
+  if (aiderFilesCache && aiderFilesCache.expiresAt > Date.now()) {
+    return aiderFilesCache.files;
+  }
+
+  const home = os.homedir();
+  const searchDirs = [
+    path.join(home, 'Desktop'),
+    path.join(home, 'Documents'),
+    path.join(home, 'Projects'),
+    path.join(home, 'project'),
+    path.join(home, 'work'),
+    path.join(home, 'dev'),
+    path.join(home, 'code'),
+    path.join(home, 'src'),
+  ].filter(d => fs.existsSync(d));
+
+  const files = new Set<string>();
+  for (const dir of searchDirs) {
+    for (const f of findAiderFiles(dir, 4)) {
+      files.add(f);
+    }
+  }
+
+  const nextFiles = [...files];
+  aiderFilesCache = {
+    expiresAt: Date.now() + AIDER_FILE_LIST_TTL_MS,
+    files: nextFiles,
+  };
+  return nextFiles;
+}
+
 function parseAiderFile(filePath: string): {
   id: string;
   cwd: string;
@@ -38,11 +85,23 @@ function parseAiderFile(filePath: string): {
   startTime: Date;
   lastActivity: Date;
 } | null {
+  let stat: fs.Stats;
+  let mtime: number;
+  try {
+    stat = fs.statSync(filePath);
+    mtime = stat.mtimeMs;
+    const cached = aiderParseCache.get(filePath);
+    if (cached && cached.mtime === mtime) {
+      return cached.result;
+    }
+  } catch {
+    return null;
+  }
+
   let content: string;
   try { content = fs.readFileSync(filePath, 'utf8'); } catch { return null; }
 
   const cwd = path.dirname(filePath);
-  const stat = fs.statSync(filePath);
 
   // 提取开始时间
   const startMatch = content.match(/# aider chat started at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
@@ -70,11 +129,14 @@ function parseAiderFile(filePath: string): {
     });
   }
 
-  if (!messages.length) return null;
+  if (!messages.length) {
+    aiderParseCache.set(filePath, { mtime, result: null });
+    return null;
+  }
 
   const sessionId = Buffer.from(filePath).toString('base64').replace(/[/+=]/g, '').slice(0, 16);
 
-  return {
+  const result: ParsedAiderSession = {
     id: sessionId,
     cwd,
     title: title || path.basename(cwd),
@@ -82,6 +144,9 @@ function parseAiderFile(filePath: string): {
     startTime,
     lastActivity: stat.mtime,
   };
+
+  aiderParseCache.set(filePath, { mtime, result });
+  return result;
 }
 
 export class AiderAdapter implements ISessionAdapter {
@@ -92,24 +157,7 @@ export class AiderAdapter implements ISessionAdapter {
   }
 
   private getAiderFiles(): string[] {
-    const home = os.homedir();
-    // 扫描常见开发目录
-    const searchDirs = [
-      path.join(home, 'Desktop'),
-      path.join(home, 'Documents'),
-      path.join(home, 'Projects'),
-      path.join(home, 'project'),
-      path.join(home, 'work'),
-      path.join(home, 'dev'),
-      path.join(home, 'code'),
-      path.join(home, 'src'),
-    ].filter(d => fs.existsSync(d));
-
-    const files = new Set<string>();
-    for (const dir of searchDirs) {
-      for (const f of findAiderFiles(dir, 4)) files.add(f);
-    }
-    return [...files];
+    return getCachedAiderFiles();
   }
 
   async getProjects(): Promise<Project[]> {

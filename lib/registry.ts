@@ -4,13 +4,15 @@ import { CursorAdapter } from './adapters/cursor';
 import { AiderAdapter } from './adapters/aider';
 import type { ISessionAdapter, Project, Session, SessionDetail } from './types';
 
+const adapters: ISessionAdapter[] = [
+  new ClaudeCodeAdapter(),
+  new CodexAdapter(),
+  new CursorAdapter(),
+  new AiderAdapter(),
+];
+
 function getAdapters(): ISessionAdapter[] {
-  return [
-    new ClaudeCodeAdapter(),
-    new CodexAdapter(),
-    new CursorAdapter(),
-    new AiderAdapter(),
-  ];
+  return adapters;
 }
 
 async function getAllProjects(): Promise<Project[]> {

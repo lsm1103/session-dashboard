@@ -49,9 +49,9 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="px-2 py-2 space-y-1">
         <Link
-          href="/"
+          href="/dashboard"
           className={`flex items-center px-2 py-1.5 rounded text-sm gap-2 transition-colors ${
-            pathname === '/'
+            pathname === '/dashboard'
               ? 'bg-accent text-accent-foreground font-medium'
               : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
           }`}

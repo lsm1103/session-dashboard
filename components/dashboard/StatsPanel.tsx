@@ -2,7 +2,6 @@
 
 import useSWR from 'swr';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { AnalysisOverview, Session } from '@/lib/types';
 
 const fetcher = (url: string) => fetch(url).then(r => r.json());
 
@@ -10,8 +9,6 @@ interface Stats {
   totalSessions: number;
   totalProjects: number;
   perTool: { toolId: string; count: number }[];
-  recentActivity: Session[];
-  analysisOverview?: AnalysisOverview;
 }
 
 const TOOL_LABELS: Record<string, string> = {
@@ -31,7 +28,7 @@ function StatCard({ label, value }: { label: string; value: number | string }) {
 }
 
 export function StatsPanel() {
-  const { data: stats, isLoading, mutate } = useSWR<Stats>('/api/stats', fetcher, {
+  const { data: stats, isLoading, mutate } = useSWR<Stats>('/api/stats/summary', fetcher, {
     refreshInterval: 60000,
   });
 

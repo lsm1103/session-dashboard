@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { analyzeSession, buildAnalysisOverview } from '@/lib/analysis';
-import { getAllProjects, getAllSessions, getSessionById } from '@/lib/registry';
+import { getSessionById } from '@/lib/registry';
+import { getIndexedProjects, getIndexedSessions } from '@/lib/index-store';
 
 const STATS_TTL_MS = 60_000;
 const ANALYSIS_SAMPLE_SIZE = 8;
@@ -9,7 +10,7 @@ type StatsPayload = {
   totalSessions: number;
   totalProjects: number;
   perTool: { toolId: string; count: number }[];
-  recentActivity: Awaited<ReturnType<typeof getAllSessions>>;
+  recentActivity: Awaited<ReturnType<typeof getIndexedSessions>>;
   analysisOverview: ReturnType<typeof buildAnalysisOverview>;
 };
 
@@ -21,10 +22,11 @@ export async function GET() {
       return NextResponse.json(statsCache.payload);
     }
 
-    const [projects, recentSessions] = await Promise.all([
-      getAllProjects(),
-      getAllSessions({ limit: 10 }),
+    const [projects, sessions] = await Promise.all([
+      getIndexedProjects(),
+      getIndexedSessions(),
     ]);
+    const recentSessions = sessions.slice(0, 10);
 
     const perTool: Record<string, number> = {};
     for (const project of projects) {

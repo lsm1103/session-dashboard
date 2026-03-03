@@ -3,24 +3,13 @@ import path from 'path';
 import readline from 'readline';
 import os from 'os';
 import { findIndexedFilePathBySessionId } from '../index-lookup';
+import { LruCache } from '../lru-cache';
 import type { ISessionAdapter, Project, Session, SessionDetail, Message } from '../types';
 
 const BASE_PATH = path.join(os.homedir(), '.codex', 'sessions');
 
 function encodeProjectId(cwd: string): string {
   return encodeURIComponent(cwd);
-}
-
-async function readLines(filePath: string): Promise<string[]> {
-  const lines: string[] = [];
-  const rl = readline.createInterface({
-    input: fs.createReadStream(filePath),
-    crlfDelay: Infinity,
-  });
-  for await (const line of rl) {
-    if (line.trim()) lines.push(line);
-  }
-  return lines;
 }
 
 function shouldSkipUserMessage(content: string): boolean {
@@ -38,7 +27,8 @@ interface CodexSessionMeta {
 }
 
 type ParsedCodexSession = NonNullable<Awaited<ReturnType<typeof parseCodexFile>>>;
-const parseCache = new Map<string, { mtime: number; result: ParsedCodexSession }>();
+const PARSE_CACHE_LIMIT = 200;
+const parseCache = new LruCache<string, { mtime: number; result: ParsedCodexSession }>(PARSE_CACHE_LIMIT);
 
 async function parseCodexFile(filePath: string): Promise<{
   sessionId: string;
@@ -48,19 +38,14 @@ async function parseCodexFile(filePath: string): Promise<{
   messages: Message[];
   title: string;
 } | null> {
+  let mtime = 0;
   try {
-    const mtime = fs.statSync(filePath).mtimeMs;
+    const stat = fs.statSync(filePath);
+    mtime = stat.mtimeMs;
     const cached = parseCache.get(filePath);
     if (cached && cached.mtime === mtime) {
       return cached.result;
     }
-  } catch {
-    return null;
-  }
-
-  let lines: string[];
-  try {
-    lines = await readLines(filePath);
   } catch {
     return null;
   }
@@ -71,127 +56,135 @@ async function parseCodexFile(filePath: string): Promise<{
   let lastActivity: Date | null = null;
   let pendingReasoning: string | null = null;
 
-  for (const rawLine of lines) {
-    let line: Record<string, unknown>;
-    try {
-      line = JSON.parse(rawLine);
-    } catch {
-      continue;
-    }
+  const rl = readline.createInterface({
+    input: fs.createReadStream(filePath),
+    crlfDelay: Infinity,
+  });
 
-    if (line.type === 'session_meta') {
-      const payload = line.payload as CodexSessionMeta;
-      meta = payload;
-      continue;
-    }
+  try {
+    for await (const rawLine of rl) {
+      if (!rawLine.trim()) continue;
 
-    if (line.type === 'response_item') {
-      const payload = line.payload as Record<string, unknown>;
+      let line: Record<string, unknown>;
+      try {
+        line = JSON.parse(rawLine);
+      } catch {
+        continue;
+      }
 
-      // Handle reasoning type
-      if (payload.type === 'reasoning') {
-        let reasoningText = '';
+      if (line.type === 'session_meta') {
+        const payload = line.payload as CodexSessionMeta;
+        meta = payload;
+        continue;
+      }
+
+      if (line.type === 'response_item') {
+        const payload = line.payload as Record<string, unknown>;
+
+        if (payload.type === 'reasoning') {
+          let reasoningText = '';
+          const contentArr = payload.content as Array<Record<string, unknown>> | undefined;
+          const summaryArr = payload.summary as Array<Record<string, unknown>> | undefined;
+          if (contentArr) {
+            reasoningText = contentArr
+              .filter(c => c.type === 'input_text')
+              .map(c => String(c.text))
+              .join('');
+          }
+          if (!reasoningText && summaryArr) {
+            reasoningText = summaryArr
+              .map(c => String(c.text || ''))
+              .join('');
+          }
+          if (reasoningText) {
+            pendingReasoning = reasoningText;
+          }
+          continue;
+        }
+
+        if (payload.type === 'function_call') {
+          const name = String(payload.name || 'unknown');
+          let argsStr: string;
+          try {
+            const args = typeof payload.arguments === 'string'
+              ? JSON.parse(payload.arguments)
+              : payload.arguments;
+            argsStr = JSON.stringify(args, null, 2);
+          } catch {
+            argsStr = String(payload.arguments || '{}');
+          }
+          const content = `🔧 **${name}**\n\`\`\`json\n${argsStr}\n\`\`\``;
+          const msgId = `${meta?.id || 'cdx'}-fc-${messages.length}`;
+          const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
+          lastActivity = ts;
+          messages.push({ id: msgId, role: 'assistant', content, timestamp: ts });
+          continue;
+        }
+
+        if (payload.type === 'function_call_output') {
+          const output = String(payload.output || '');
+          const truncated = output.length > 500 ? output.slice(0, 500) + '...' : output;
+          const content = `📤 **工具返回**\n\`\`\`\n${truncated}\n\`\`\``;
+          const msgId = `${meta?.id || 'cdx'}-fo-${messages.length}`;
+          const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
+          lastActivity = ts;
+          messages.push({ id: msgId, role: 'assistant', content, timestamp: ts });
+          continue;
+        }
+
+        if (payload.type !== 'message') continue;
+
+        const role = payload.role as string;
         const contentArr = payload.content as Array<Record<string, unknown>> | undefined;
-        const summaryArr = payload.summary as Array<Record<string, unknown>> | undefined;
-        if (contentArr) {
-          reasoningText = contentArr
+        if (!contentArr) continue;
+
+        if (role === 'user') {
+          const textContent = contentArr
             .filter(c => c.type === 'input_text')
             .map(c => String(c.text))
             .join('');
-        }
-        if (!reasoningText && summaryArr) {
-          reasoningText = summaryArr
-            .map(c => String(c.text || ''))
+          if (!textContent || shouldSkipUserMessage(textContent)) continue;
+
+          const msgId = `${meta?.id || 'cdx'}-u-${messages.length}`;
+          const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
+          lastActivity = ts;
+          messages.push({
+            id: msgId,
+            role: 'user',
+            content: textContent,
+            timestamp: ts,
+          });
+
+          if (!title) title = textContent.slice(0, 80);
+        } else if (role === 'assistant') {
+          const textContent = contentArr
+            .filter(c => c.type === 'output_text')
+            .map(c => String(c.text))
             .join('');
+          if (!textContent) continue;
+
+          let finalContent = textContent;
+          if (pendingReasoning) {
+            finalContent = `> 💭 ${pendingReasoning}\n\n${textContent}`;
+            pendingReasoning = null;
+          }
+
+          const msgId = `${meta?.id || 'cdx'}-a-${messages.length}`;
+          const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
+          lastActivity = ts;
+          messages.push({
+            id: msgId,
+            role: 'assistant',
+            content: finalContent,
+            timestamp: ts,
+          });
         }
-        if (reasoningText) {
-          // Store pending reasoning to attach to next assistant message
-          pendingReasoning = reasoningText;
-        }
-        continue;
-      }
-
-      // Handle function_call type
-      if (payload.type === 'function_call') {
-        const name = String(payload.name || 'unknown');
-        let argsStr: string;
-        try {
-          const args = typeof payload.arguments === 'string'
-            ? JSON.parse(payload.arguments)
-            : payload.arguments;
-          argsStr = JSON.stringify(args, null, 2);
-        } catch {
-          argsStr = String(payload.arguments || '{}');
-        }
-        const content = `🔧 **${name}**\n\`\`\`json\n${argsStr}\n\`\`\``;
-        const msgId = `${meta?.id || 'cdx'}-fc-${messages.length}`;
-        const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
-        lastActivity = ts;
-        messages.push({ id: msgId, role: 'assistant', content, timestamp: ts });
-        continue;
-      }
-
-      // Handle function_call_output type
-      if (payload.type === 'function_call_output') {
-        const output = String(payload.output || '');
-        const truncated = output.length > 500 ? output.slice(0, 500) + '...' : output;
-        const content = `📤 **工具返回**\n\`\`\`\n${truncated}\n\`\`\``;
-        const msgId = `${meta?.id || 'cdx'}-fo-${messages.length}`;
-        const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
-        lastActivity = ts;
-        messages.push({ id: msgId, role: 'assistant', content, timestamp: ts });
-        continue;
-      }
-
-      if (payload.type !== 'message') continue;
-
-      const role = payload.role as string;
-      const contentArr = payload.content as Array<Record<string, unknown>> | undefined;
-      if (!contentArr) continue;
-
-      if (role === 'user') {
-        const textContent = contentArr
-          .filter(c => c.type === 'input_text')
-          .map(c => String(c.text))
-          .join('');
-        if (!textContent || shouldSkipUserMessage(textContent)) continue;
-
-        const msgId = `${meta?.id || 'cdx'}-u-${messages.length}`;
-        const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
-        lastActivity = ts;
-        messages.push({
-          id: msgId,
-          role: 'user',
-          content: textContent,
-          timestamp: ts,
-        });
-
-        if (!title) title = textContent.slice(0, 80);
-      } else if (role === 'assistant') {
-        const textContent = contentArr
-          .filter(c => c.type === 'output_text')
-          .map(c => String(c.text))
-          .join('');
-        if (!textContent) continue;
-
-        // Prepend pending reasoning if available
-        let finalContent = textContent;
-        if (pendingReasoning) {
-          finalContent = `> 💭 ${pendingReasoning}\n\n${textContent}`;
-          pendingReasoning = null;
-        }
-
-        const msgId = `${meta?.id || 'cdx'}-a-${messages.length}`;
-        const ts = line.timestamp ? new Date(String(line.timestamp)) : new Date();
-        lastActivity = ts;
-        messages.push({
-          id: msgId,
-          role: 'assistant',
-          content: finalContent,
-          timestamp: ts,
-        });
       }
     }
+  } catch {
+    return null;
+  } finally {
+    rl.close();
   }
 
   // If there's leftover reasoning not followed by an assistant message, emit as standalone
@@ -219,12 +212,7 @@ async function parseCodexFile(filePath: string): Promise<{
     title: title || 'Untitled session',
   };
 
-  try {
-    const mtime = fs.statSync(filePath).mtimeMs;
-    parseCache.set(filePath, { mtime, result });
-  } catch {
-    // ignore cache write failures
-  }
+  parseCache.set(filePath, { mtime, result });
 
   return result;
 }

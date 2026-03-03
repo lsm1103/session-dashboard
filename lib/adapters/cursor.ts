@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { LruCache } from '../lru-cache';
 import type { ISessionAdapter, Project, Session, SessionDetail, Message } from '../types';
 
 // better-sqlite3 在 server 环境同步运行，用 require 避免 ESM 问题
@@ -24,6 +25,10 @@ function getAllDbFiles(base: string): string[] {
   return files;
 }
 
+const DB_FILE_LIST_TTL_MS = 30_000;
+const DB_PARSE_CACHE_LIMIT = 64;
+let dbFilesCache: { expiresAt: number; files: string[] } | null = null;
+
 interface CursorBubble {
   type?: string;
   role?: string;
@@ -39,10 +44,38 @@ interface CursorTab {
   messages?: CursorBubble[];
 }
 
-function parseCursorDb(dbPath: string): {
+type ParsedCursorDb = {
   sessions: { id: string; cwd: string; title: string; messages: Message[]; startTime: Date; lastActivity: Date }[];
-} {
-  const result: ReturnType<typeof parseCursorDb> = { sessions: [] };
+};
+
+const dbParseCache = new LruCache<string, { mtime: number; result: ParsedCursorDb }>(DB_PARSE_CACHE_LIMIT);
+
+function getCachedDbFiles(base: string): string[] {
+  if (dbFilesCache && dbFilesCache.expiresAt > Date.now()) {
+    return dbFilesCache.files;
+  }
+
+  const files = getAllDbFiles(base);
+  dbFilesCache = {
+    expiresAt: Date.now() + DB_FILE_LIST_TTL_MS,
+    files,
+  };
+  return files;
+}
+
+function parseCursorDb(dbPath: string): ParsedCursorDb {
+  let mtime: number;
+  try {
+    mtime = fs.statSync(dbPath).mtimeMs;
+    const cached = dbParseCache.get(dbPath);
+    if (cached && cached.mtime === mtime) {
+      return cached.result;
+    }
+  } catch {
+    return { sessions: [] };
+  }
+
+  const result: ParsedCursorDb = { sessions: [] };
   try {
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     const rows = db.prepare("SELECT key, value FROM ItemTable WHERE key LIKE '%chatdata%' OR key LIKE '%chat%'").all() as { key: string; value: string }[];
@@ -90,6 +123,8 @@ function parseCursorDb(dbPath: string): {
       } catch { /* skip malformed row */ }
     }
   } catch { /* skip unreadable db */ }
+
+  dbParseCache.set(dbPath, { mtime, result });
   return result;
 }
 
@@ -102,7 +137,7 @@ export class CursorAdapter implements ISessionAdapter {
 
   async getProjects(): Promise<Project[]> {
     const base = getCursorBase();
-    const dbFiles = getAllDbFiles(base);
+    const dbFiles = getCachedDbFiles(base);
     const projectMap = new Map<string, { count: number; lastActivity: Date }>();
 
     for (const dbPath of dbFiles) {
@@ -129,7 +164,7 @@ export class CursorAdapter implements ISessionAdapter {
 
   async getSessions(projectPath?: string): Promise<Session[]> {
     const base = getCursorBase();
-    const dbFiles = getAllDbFiles(base);
+    const dbFiles = getCachedDbFiles(base);
     const sessions: Session[] = [];
 
     for (const dbPath of dbFiles) {
@@ -154,7 +189,7 @@ export class CursorAdapter implements ISessionAdapter {
   async getSession(id: string): Promise<SessionDetail> {
     const rawId = id.replace(/^csr-cursor-/, '').replace(/^csr-/, '');
     const base = getCursorBase();
-    const dbFiles = getAllDbFiles(base);
+    const dbFiles = getCachedDbFiles(base);
 
     for (const dbPath of dbFiles) {
       const { sessions } = parseCursorDb(dbPath);

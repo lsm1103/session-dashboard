@@ -15,29 +15,24 @@
     "session-dashboard": "./scripts/session-dashboard.cjs"
   },
   "files": [
-    "app",
-    "components",
-    "hooks",
-    "lib",
+    ".next/build",
+    ".next/package.json",
+    ".next/static",
     "public",
     "scripts",
-    "README.md",
-    "next-env.d.ts",
-    "next.config.ts",
-    "postcss.config.mjs",
-    "components.json",
-    "tsconfig.json"
+    "next.config.ts"
   ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "node ./scripts/session-dashboard-server.cjs dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node ./scripts/session-dashboard-server.cjs start",
     "lint": "eslint",
     "test": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test",
     "typecheck": "./node_modules/.bin/tsc -p tsconfig.typecheck.json --noEmit --incremental false",
+    "prepack": "npm run build",
     "prepare": "husky",
     "release:check": "npm run typecheck && npm run test && npm run build"
   },
@@ -58,7 +53,8 @@
     "recharts": "^3.7.0",
     "shiki": "^4.0.0",
     "swr": "^2.4.1",
-    "tailwind-merge": "^3.5.0"
+    "tailwind-merge": "^3.5.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

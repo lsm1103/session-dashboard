@@ -8,6 +8,7 @@ import type { Project, Session } from '@/lib/types';
 import { SessionCard } from '@/components/session-list/SessionCard';
 import { SessionDetail } from '@/components/session-detail/SessionDetail';
 import { useRealtimeWatch } from '@/hooks/useRealtimeWatch';
+import { useProjectsStream } from '@/hooks/useProjectsStream';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -356,7 +357,12 @@ function SessionsBrowser() {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [search]);
 
-  const { data: projects, isLoading: projectsLoading } = useSWR<Project[]>('/api/projects', fetcher);
+  const {
+    projects,
+    isLoading: projectsLoading,
+    isStreaming: projectsStreaming,
+    status: projectsStatus,
+  } = useProjectsStream();
 
   // 按工具筛选项目
   const filteredProjects = (projects ?? []).filter(p => {
@@ -558,7 +564,7 @@ function SessionsBrowser() {
                   <span className="text-sm font-semibold">Session</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Link href="/" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
+                  <Link href="/dashboard" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
                     仪表板
                   </Link>
                   <button
@@ -639,6 +645,15 @@ function SessionsBrowser() {
 
               {/* 工具筛选 */}
               <FilterTabs value={toolFilter} onChange={setToolFilter} counts={filterCounts} />
+
+              {projectsStatus && (
+                <div className="shrink-0 px-3 py-2 border-b border-border bg-emerald-500/5">
+                  <p className="text-[11px] text-muted-foreground">
+                    {projectsStatus}
+                    {projectsStreaming && filteredProjects.length > 0 ? `，已发现 ${filteredProjects.length} 个项目` : ''}
+                  </p>
+                </div>
+              )}
 
               {/* 项目卡片列表 */}
               <div className="flex-1 overflow-y-auto">

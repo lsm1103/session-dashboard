@@ -2,9 +2,14 @@ import { NextResponse } from 'next/server';
 import chokidar from 'chokidar';
 import path from 'path';
 import os from 'os';
+import { clearIndexedSnapshotCache } from '@/lib/index-store';
 
 const CLAUDE_BASE = path.join(os.homedir(), '.claude', 'projects');
 const CODEX_BASE = path.join(os.homedir(), '.codex', 'sessions');
+const WATCH_PATTERNS = [
+  path.join(CLAUDE_BASE, '**/*.jsonl'),
+  path.join(CODEX_BASE, '**/*.jsonl'),
+];
 
 // Module-level singleton watcher
 let watcher: ReturnType<typeof chokidar.watch> | null = null;
@@ -13,24 +18,21 @@ const clients = new Set<ReadableStreamDefaultController>();
 function getWatcher() {
   if (watcher) return watcher;
 
-  watcher = chokidar.watch([CLAUDE_BASE, CODEX_BASE], {
+  watcher = chokidar.watch(WATCH_PATTERNS, {
     persistent: true,
     ignoreInitial: true,
-    depth: 5,
     awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
   });
 
-  watcher.on('add', (filePath: string) => {
-    if (!filePath.endsWith('.jsonl')) return;
+  const handleSessionFileEvent = (event: 'new-session' | 'updated', filePath: string) => {
     const toolId = filePath.startsWith(CLAUDE_BASE) ? 'claude-code' : 'codex';
-    broadcast({ event: 'new-session', toolId, path: filePath });
-  });
+    clearIndexedSnapshotCache();
+    broadcast({ event, toolId, path: filePath });
+  };
 
-  watcher.on('change', (filePath: string) => {
-    if (!filePath.endsWith('.jsonl')) return;
-    const toolId = filePath.startsWith(CLAUDE_BASE) ? 'claude-code' : 'codex';
-    broadcast({ event: 'updated', toolId, path: filePath });
-  });
+  watcher.on('add', (filePath: string) => handleSessionFileEvent('new-session', filePath));
+  watcher.on('change', (filePath: string) => handleSessionFileEvent('updated', filePath));
+  watcher.on('unlink', (filePath: string) => handleSessionFileEvent('updated', filePath));
 
   // Graceful cleanup on process exit
   const cleanup = () => { watcher?.close(); watcher = null; };

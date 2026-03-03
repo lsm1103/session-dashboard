@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import os from 'os';
+import { LruCache } from '../lru-cache';
 import type { ISessionAdapter, Project, Session, SessionDetail, Message } from '../types';
 
 const BASE_PATH = path.join(os.homedir(), '.claude', 'projects');
@@ -44,21 +45,10 @@ function isValidAssistantMessage(line: Record<string, unknown>): boolean {
   return true;
 }
 
-async function readLines(filePath: string): Promise<string[]> {
-  const lines: string[] = [];
-  const rl = readline.createInterface({
-    input: fs.createReadStream(filePath),
-    crlfDelay: Infinity,
-  });
-  for await (const line of rl) {
-    if (line.trim()) lines.push(line);
-  }
-  return lines;
-}
-
 // Module-level cache: key = filePath, value = { mtime: number, result: ParsedSession }
 type ParsedSession = NonNullable<Awaited<ReturnType<typeof parseSessionFile>>>;
-const parseCache = new Map<string, { mtime: number; result: ParsedSession }>();
+const PARSE_CACHE_LIMIT = 200;
+const parseCache = new LruCache<string, { mtime: number; result: ParsedSession }>(PARSE_CACHE_LIMIT);
 
 async function parseSessionFile(filePath: string): Promise<{
   sessionId: string;
@@ -70,19 +60,16 @@ async function parseSessionFile(filePath: string): Promise<{
   touchedFiles: string[];
 } | null> {
   // Check cache by file mtime
+  let fileModifiedAt: Date | null = null;
+  let mtime = 0;
   try {
-    const mtime = fs.statSync(filePath).mtimeMs;
+    const stat = fs.statSync(filePath);
+    mtime = stat.mtimeMs;
+    fileModifiedAt = stat.mtime;
     const cached = parseCache.get(filePath);
     if (cached && cached.mtime === mtime) {
       return cached.result;
     }
-  } catch {
-    // File may not exist; continue to let readLines handle the error
-  }
-
-  let lines: string[];
-  try {
-    lines = await readLines(filePath);
   } catch {
     return null;
   }
@@ -102,138 +89,144 @@ async function parseSessionFile(filePath: string): Promise<{
     'thinking', 'image', 'hook_progress', 'agent_progress', 'direct'
   ]);
 
-  for (const rawLine of lines) {
-    let line: Record<string, unknown>;
-    try {
-      line = JSON.parse(rawLine);
-    } catch {
-      continue;
-    }
+  const rl = readline.createInterface({
+    input: fs.createReadStream(filePath),
+    crlfDelay: Infinity,
+  });
 
-    // 只提取 cwd（sessionId 已用文件名，不再从内容覆盖）
-    if (!cwd && line.cwd) cwd = String(line.cwd);
-    if (line.timestamp) {
-      const ts = new Date(String(line.timestamp));
-      if (!startTime) startTime = ts;
-      lastActivity = ts;
-    }
+  try {
+    for await (const rawLine of rl) {
+      if (!rawLine.trim()) continue;
 
-    if (SKIP_TYPES.has(String(line.type))) continue;
-
-    // tool_use 事件：工具调用
-    if (line.type === 'tool_use') {
-      const toolName = String((line as Record<string, unknown>).name || 'unknown');
-      const input = (line as Record<string, unknown>).input;
-      let inputStr: string;
+      let line: Record<string, unknown>;
       try {
-        inputStr = JSON.stringify(input, null, 2);
+        line = JSON.parse(rawLine);
       } catch {
-        inputStr = String(input || '{}');
+        continue;
       }
-      // 截断超长输入
-      if (inputStr.length > 800) inputStr = inputStr.slice(0, 800) + '\n...';
 
-      // Extract file paths from tool input
-      const inputObj = input as Record<string, unknown> | undefined;
-      if (inputObj) {
-        let filePath: string | undefined;
-        if ((toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') && typeof inputObj.file_path === 'string') {
-          filePath = inputObj.file_path;
-        } else if ((toolName === 'Glob' || toolName === 'Grep') && typeof inputObj.path === 'string') {
-          filePath = inputObj.path;
-        } else if (toolName === 'Bash' && typeof inputObj.command === 'string') {
-          // Extract paths from bash commands: quoted paths or absolute paths
-          const cmd = inputObj.command;
-          const pathMatches = cmd.match(/(?:["'])(\/[^"']+)(?:["'])|(?:^|\s)(\/\S+)/g);
-          if (pathMatches) {
-            for (const m of pathMatches) {
-              const cleaned = m.trim().replace(/^["']|["']$/g, '');
-              if (cleaned.startsWith('/') && !touchedFilesSet.has(cleaned)) {
-                touchedFilesSet.add(cleaned);
-                touchedFilesOrder.push(cleaned);
+      // 只提取 cwd（sessionId 已用文件名，不再从内容覆盖）
+      if (!cwd && line.cwd) cwd = String(line.cwd);
+      if (line.timestamp) {
+        const ts = new Date(String(line.timestamp));
+        if (!startTime) startTime = ts;
+        lastActivity = ts;
+      }
+
+      if (SKIP_TYPES.has(String(line.type))) continue;
+
+      if (line.type === 'tool_use') {
+        const toolName = String((line as Record<string, unknown>).name || 'unknown');
+        const input = (line as Record<string, unknown>).input;
+        let inputStr: string;
+        try {
+          inputStr = JSON.stringify(input, null, 2);
+        } catch {
+          inputStr = String(input || '{}');
+        }
+        if (inputStr.length > 800) inputStr = inputStr.slice(0, 800) + '\n...';
+
+        const inputObj = input as Record<string, unknown> | undefined;
+        if (inputObj) {
+          let touchedPath: string | undefined;
+          if ((toolName === 'Read' || toolName === 'Write' || toolName === 'Edit') && typeof inputObj.file_path === 'string') {
+            touchedPath = inputObj.file_path;
+          } else if ((toolName === 'Glob' || toolName === 'Grep') && typeof inputObj.path === 'string') {
+            touchedPath = inputObj.path;
+          } else if (toolName === 'Bash' && typeof inputObj.command === 'string') {
+            const cmd = inputObj.command;
+            const pathMatches = cmd.match(/(?:["'])(\/[^"']+)(?:["'])|(?:^|\s)(\/\S+)/g);
+            if (pathMatches) {
+              for (const match of pathMatches) {
+                const cleaned = match.trim().replace(/^["']|["']$/g, '');
+                if (cleaned.startsWith('/') && !touchedFilesSet.has(cleaned)) {
+                  touchedFilesSet.add(cleaned);
+                  touchedFilesOrder.push(cleaned);
+                }
               }
             }
           }
+          if (touchedPath && !touchedFilesSet.has(touchedPath)) {
+            touchedFilesSet.add(touchedPath);
+            touchedFilesOrder.push(touchedPath);
+          }
         }
-        if (filePath && !touchedFilesSet.has(filePath)) {
-          touchedFilesSet.add(filePath);
-          touchedFilesOrder.push(filePath);
+
+        const msgId = `${sessionId}-tu-${messages.length}`;
+        messages.push({
+          id: msgId,
+          role: 'assistant' as const,
+          content: `\x00TOOL_USE\x00${toolName}\x00${inputStr}`,
+          timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
+        });
+        continue;
+      }
+
+      if (line.type === 'tool_result') {
+        const content = (line as Record<string, unknown>).content;
+        let resultStr: string;
+        if (typeof content === 'string') {
+          resultStr = content;
+        } else if (Array.isArray(content)) {
+          resultStr = content
+            .filter((c: unknown) => typeof c === 'object' && c !== null && (c as Record<string, unknown>).type === 'text')
+            .map((c: unknown) => String((c as Record<string, unknown>).text))
+            .join('\n');
+        } else {
+          resultStr = JSON.stringify(content);
         }
+        if (resultStr.length > 600) resultStr = resultStr.slice(0, 600) + '\n...';
+
+        const msgId = `${sessionId}-tr-${messages.length}`;
+        messages.push({
+          id: msgId,
+          role: 'assistant' as const,
+          content: `\x00TOOL_RESULT\x00${resultStr}`,
+          timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
+        });
+        continue;
       }
 
-      const msgId = `${sessionId}-tu-${messages.length}`;
-      messages.push({
-        id: msgId,
-        role: 'assistant' as const,
-        content: `\x00TOOL_USE\x00${toolName}\x00${inputStr}`,
-        timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
-      });
-      continue;
-    }
+      if (isValidUserMessage(line)) {
+        const msg = line.message as Record<string, unknown>;
+        const content = extractTextFromContent(msg.content);
+        if (!content) continue;
+        if (content.startsWith('<') || content.startsWith('#')) continue;
 
-    // tool_result 事件：工具返回
-    if (line.type === 'tool_result') {
-      const content = (line as Record<string, unknown>).content;
-      let resultStr: string;
-      if (typeof content === 'string') {
-        resultStr = content;
-      } else if (Array.isArray(content)) {
-        resultStr = content
-          .filter((c: unknown) => typeof c === 'object' && c !== null && (c as Record<string, unknown>).type === 'text')
-          .map((c: unknown) => String((c as Record<string, unknown>).text))
-          .join('\n');
-      } else {
-        resultStr = JSON.stringify(content);
+        const msgId = `${sessionId}-u-${messages.length}`;
+        messages.push({
+          id: msgId,
+          role: 'user',
+          content,
+          timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
+        });
+
+        if (!title && content) {
+          title = content.slice(0, 80);
+        }
+      } else if (isValidAssistantMessage(line)) {
+        const msg = line.message as Record<string, unknown>;
+        const contentArr = msg.content as Array<Record<string, unknown>> | undefined;
+        if (!contentArr) continue;
+        const content = contentArr
+          .filter(c => c.type === 'text')
+          .map(c => String(c.text))
+          .join('');
+        if (!content) continue;
+
+        const msgId = `${sessionId}-a-${messages.length}`;
+        messages.push({
+          id: msgId,
+          role: 'assistant',
+          content,
+          timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
+        });
       }
-      // 截断
-      if (resultStr.length > 600) resultStr = resultStr.slice(0, 600) + '\n...';
-
-      const msgId = `${sessionId}-tr-${messages.length}`;
-      messages.push({
-        id: msgId,
-        role: 'assistant' as const,
-        content: `\x00TOOL_RESULT\x00${resultStr}`,
-        timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
-      });
-      continue;
     }
-
-    if (isValidUserMessage(line)) {
-      const msg = line.message as Record<string, unknown>;
-      const content = extractTextFromContent(msg.content);
-      if (!content) continue;
-      // Skip system-injected messages
-      if (content.startsWith('<') || content.startsWith('#')) continue;
-
-      const msgId = `${sessionId}-u-${messages.length}`;
-      messages.push({
-        id: msgId,
-        role: 'user',
-        content,
-        timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
-      });
-
-      if (!title && content) {
-        title = content.slice(0, 80);
-      }
-    } else if (isValidAssistantMessage(line)) {
-      const msg = line.message as Record<string, unknown>;
-      const contentArr = msg.content as Array<Record<string, unknown>> | undefined;
-      if (!contentArr) continue;
-      const content = contentArr
-        .filter(c => c.type === 'text')
-        .map(c => String(c.text))
-        .join('');
-      if (!content) continue;
-
-      const msgId = `${sessionId}-a-${messages.length}`;
-      messages.push({
-        id: msgId,
-        role: 'assistant',
-        content,
-        timestamp: line.timestamp ? new Date(String(line.timestamp)) : new Date(),
-      });
-    }
+  } catch {
+    return null;
+  } finally {
+    rl.close();
   }
 
   if (!sessionId) {
@@ -244,20 +237,14 @@ async function parseSessionFile(filePath: string): Promise<{
   const result = {
     sessionId,
     cwd: cwd || path.dirname(filePath),
-    startTime: startTime || new Date(fs.statSync(filePath).mtime),
-    lastActivity: lastActivity || new Date(fs.statSync(filePath).mtime),
+    startTime: startTime || fileModifiedAt || new Date(),
+    lastActivity: lastActivity || fileModifiedAt || new Date(),
     messages,
     title: title || 'Untitled session',
     touchedFiles: touchedFilesOrder.slice(0, 20),
   };
 
-  // Store in cache
-  try {
-    const mtime = fs.statSync(filePath).mtimeMs;
-    parseCache.set(filePath, { mtime, result });
-  } catch {
-    // Ignore cache store errors
-  }
+  parseCache.set(filePath, { mtime, result });
 
   return result;
 }
