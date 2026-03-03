@@ -1,6 +1,6 @@
 {
   "name": "session-dashboard",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "description": "Browse and monitor local AI coding sessions in a Next.js dashboard.",
   "bin": {
