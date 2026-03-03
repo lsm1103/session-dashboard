@@ -1,20 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MessageBubble } from './MessageBubble';
 import { DebugPathReplay } from './DebugPathReplay';
 import { NarrativeTimeline } from './NarrativeTimeline';
 import { SessionEfficiencyPanel } from './SessionEfficiencyPanel';
-import {
-  DEFAULT_MESSAGE_CHUNK_SIZE,
-  getInitialVisibleMessageCount,
-  getNextVisibleMessageCount,
-  getVisibleMessages,
-} from '@/lib/session-view';
+import { buildSessionDetailRows, findMessageRowIndex } from '@/lib/session-detail-rows';
 import { useSession } from '@/hooks/useSession';
-import type { SessionDetail as SessionDetailType, Message } from '@/lib/types';
+import type { SessionDetail as SessionDetailType } from '@/lib/types';
 
 function shortPath(fullPath: string): string {
   return fullPath.replace(/^\/Users\/[^/]+\//, '~/');
@@ -34,22 +30,6 @@ function formatDuration(startTime: Date, endTime: Date): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return `${hours}h ${minutes}m`;
-}
-
-/** 把 messages 按日期分组，返回 { dateStr, messages }[] */
-function groupMessagesByDate(messages: Message[]): { dateStr: string; messages: Message[] }[] {
-  if (messages.length === 0) return [];
-  const groups: { dateStr: string; messages: Message[] }[] = [];
-  let currentDate = '';
-  for (const msg of messages) {
-    const d = new Date(msg.timestamp).toLocaleDateString('zh-CN');
-    if (d !== currentDate) {
-      currentDate = d;
-      groups.push({ dateStr: d, messages: [] });
-    }
-    groups[groups.length - 1].messages.push(msg);
-  }
-  return groups;
 }
 
 /** 导出 session 为 Markdown 并触发下载 */
@@ -87,17 +67,32 @@ interface Props {
   onClose?: () => void;
 }
 
+const DATE_ROW_ESTIMATE = 44;
+const MESSAGE_ROW_ESTIMATE = 156;
+const MESSAGE_ROW_OVERSCAN = 8;
+
 export function SessionDetail({ sessionId, onClose }: Props) {
   const { session, isLoading, error } = useSession(sessionId);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const rows = useMemo(() => buildSessionDetailRows(session?.messages ?? []), [session?.messages]);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: index => (rows[index]?.type === 'date' ? DATE_ROW_ESTIMATE : MESSAGE_ROW_ESTIMATE),
+    getItemKey: index => rows[index]?.key ?? `session-row:${index}`,
+    overscan: MESSAGE_ROW_OVERSCAN,
+  });
 
   // 切换 session 时滚动到底部
   useEffect(() => {
-    if (session && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [session?.id]);
+    if (!session || rows.length === 0) return;
+    requestAnimationFrame(() => {
+      const scrollElement = scrollRef.current;
+      if (scrollElement) {
+        scrollElement.scrollTop = scrollElement.scrollHeight;
+      }
+    });
+  }, [session?.id, rows.length]);
 
   const handleExport = useCallback(() => {
     if (session) exportSessionAsMarkdown(session);
@@ -105,12 +100,6 @@ export function SessionDetail({ sessionId, onClose }: Props) {
 
   const [bookmarkedIds, setBookmarkedIds] = useState<string[]>([]);
   const [showAnalysis, setShowAnalysis] = useState(true);
-  const [visibleMessageCount, setVisibleMessageCount] = useState(DEFAULT_MESSAGE_CHUNK_SIZE);
-
-  useEffect(() => {
-    if (!session) return;
-    setVisibleMessageCount(getInitialVisibleMessageCount(session.messages.length));
-  }, [session?.id, session?.messages.length, session]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -137,22 +126,25 @@ export function SessionDetail({ sessionId, onClose }: Props) {
     };
   }, [sessionId]);
 
+  const scrollToMessage = useCallback((messageId: string) => {
+    const rowIndex = findMessageRowIndex(rows, messageId);
+    if (rowIndex < 0) return;
+
+    virtualizer.scrollToIndex(rowIndex, { align: 'center' });
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = scrollRef.current?.querySelector(`[data-msg-id="${messageId}"]`);
+        if (el instanceof HTMLElement) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    });
+  }, [rows, virtualizer]);
+
   function jumpToNextBookmark() {
     if (!bookmarkedIds.length) return;
-    const targetId = bookmarkedIds[0];
-    const visibleIds = new Set(visibleMessages.map(message => message.id));
-
-    if (!visibleIds.has(targetId) && session) {
-      setVisibleMessageCount(session.messages.length);
-      requestAnimationFrame(() => {
-        const el = scrollRef.current?.querySelector(`[data-msg-id="${targetId}"]`);
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      });
-      return;
-    }
-
-    const el = scrollRef.current?.querySelector(`[data-msg-id="${targetId}"]`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollToMessage(bookmarkedIds[0]);
   }
 
   if (isLoading) {
@@ -185,9 +177,7 @@ export function SessionDetail({ sessionId, onClose }: Props) {
   const userCount = session.messages.filter(m => m.role === 'user').length;
   const assistantCount = session.messages.filter(m => m.role === 'assistant').length;
   const duration = formatDuration(session.startTime, session.lastActivity);
-  const visibleMessages = getVisibleMessages(session.messages, visibleMessageCount);
-  const dateGroups = groupMessagesByDate(visibleMessages);
-  const hiddenMessageCount = Math.max(0, session.messages.length - visibleMessageCount);
+  const virtualItems = virtualizer.getVirtualItems();
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -296,16 +286,6 @@ export function SessionDetail({ sessionId, onClose }: Props) {
 
       {/* 消息区域 */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
-        {hiddenMessageCount > 0 && (
-          <div className="mb-4">
-            <button
-              onClick={() => setVisibleMessageCount(current => getNextVisibleMessageCount(current, session.messages.length))}
-              className="w-full rounded-lg border border-border bg-card/70 px-3 py-2 text-xs text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
-            >
-              加载更早消息（还有 {hiddenMessageCount} 条）
-            </button>
-          </div>
-        )}
         {session.messages.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-12 text-muted-foreground">
             <svg className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
@@ -314,22 +294,38 @@ export function SessionDetail({ sessionId, onClose }: Props) {
             <p className="text-sm">这个 session 没有消息记录</p>
           </div>
         ) : (
-          dateGroups.map(group => (
-            <div key={group.dateStr}>
-              <div className="flex items-center gap-3 my-4">
-                <div className="flex-1 h-px bg-border/50" />
-                <span className="text-xs text-muted-foreground px-2">{group.dateStr}</span>
-                <div className="flex-1 h-px bg-border/50" />
-              </div>
-              {group.messages.map(msg => (
-                <div key={msg.id} data-msg-id={msg.id}>
-                  <MessageBubble message={msg} toolId={session.toolId} />
+          <div
+            className="relative w-full"
+            style={{ height: `${virtualizer.getTotalSize()}px` }}
+          >
+            {virtualItems.map(item => {
+              const row = rows[item.index];
+              if (!row) return null;
+
+              return (
+                <div
+                  key={row.key}
+                  ref={virtualizer.measureElement}
+                  data-index={item.index}
+                  className="absolute left-0 top-0 w-full"
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
+                  {row.type === 'date' ? (
+                    <div className="flex items-center gap-3 my-4">
+                      <div className="flex-1 h-px bg-border/50" />
+                      <span className="text-xs text-muted-foreground px-2">{row.dateLabel}</span>
+                      <div className="flex-1 h-px bg-border/50" />
+                    </div>
+                  ) : (
+                    <div data-msg-id={row.message.id}>
+                      <MessageBubble message={row.message} toolId={session.toolId} />
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
-          ))
+              );
+            })}
+          </div>
         )}
-        <div ref={bottomRef} />
       </div>
     </div>
   );
