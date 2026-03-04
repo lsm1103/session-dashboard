@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const http = require("node:http");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const chokidar = require("chokidar");
@@ -9,6 +10,7 @@ const { WebSocketServer } = require("ws");
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_HOSTNAME = "0.0.0.0";
+const MAX_PORT_PROBE_ATTEMPTS = 20;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const WS_OPEN = 1;
 const CLAUDE_BASE = path.join(os.homedir(), ".claude", "projects");
@@ -77,6 +79,52 @@ function resolvePort(nextArgs = []) {
 
 function resolveHostname(nextArgs = []) {
   return readFlag(nextArgs, "--hostname", "-H") ?? process.env.HOSTNAME ?? DEFAULT_HOSTNAME;
+}
+
+function checkPortAvailable(hostname, port) {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+
+    probe.once("error", (error) => {
+      if (error && error.code === "EADDRINUSE") {
+        resolve(false);
+        return;
+      }
+
+      reject(error);
+    });
+
+    probe.once("listening", () => {
+      probe.close((closeError) => {
+        if (closeError) {
+          reject(closeError);
+          return;
+        }
+
+        resolve(true);
+      });
+    });
+
+    probe.listen(port, hostname);
+  });
+}
+
+async function findAvailablePort(startPort, options = {}) {
+  const hostname = options.hostname ?? DEFAULT_HOSTNAME;
+  const maxAttempts = options.maxAttempts ?? MAX_PORT_PROBE_ATTEMPTS;
+  const isPortAvailable = options.isPortAvailable
+    ?? ((candidate) => checkPortAvailable(hostname, candidate));
+
+  for (let offset = 0; offset < maxAttempts; offset += 1) {
+    const candidate = startPort + offset;
+    if (await isPortAvailable(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `Could not find an available port between ${startPort} and ${startPort + maxAttempts - 1}.`
+  );
 }
 
 function toJson(event) {
@@ -240,7 +288,8 @@ async function createAppServer(args = [], options = {}) {
   const packageRoot = options.packageRoot || resolvePackageRoot();
   const { mode, nextArgs } = parseServerArgs(args);
   const hostname = resolveHostname(nextArgs);
-  const port = resolvePort(nextArgs);
+  const requestedPort = resolvePort(nextArgs);
+  const port = await findAvailablePort(requestedPort, { hostname });
   const dev = mode === "dev";
   const app = next({
     dev,
@@ -284,6 +333,7 @@ async function createAppServer(args = [], options = {}) {
     wss,
     hub,
     mode,
+    requestedPort,
     port,
     hostname,
   };
@@ -291,9 +341,13 @@ async function createAppServer(args = [], options = {}) {
 
 async function run(args = [], options = {}) {
   const runtime = await createAppServer(args, options);
+  const publicHost = runtime.hostname === "0.0.0.0" ? "localhost" : runtime.hostname;
+  const portNote = runtime.port === runtime.requestedPort
+    ? ""
+    : ` (requested ${runtime.requestedPort} was busy)`;
 
   runtime.server.listen(runtime.port, runtime.hostname, () => {
-    console.log(`[session-dashboard] Ready on http://${runtime.hostname}:${runtime.port}`);
+    console.log(`[session-dashboard] Ready on http://${publicHost}:${runtime.port}${portNote}`);
   });
 
   const shutdown = async () => {
@@ -319,6 +373,7 @@ if (require.main === module) {
 
 module.exports = {
   createAppServer,
+  findAvailablePort,
   isRealtimeUpgradePath,
   parseServerArgs,
   resolvePackageRoot,

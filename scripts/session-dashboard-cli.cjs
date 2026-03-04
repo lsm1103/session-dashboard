@@ -1,24 +1,15 @@
-const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
 const NEXT_SUBCOMMANDS = new Set(["build", "dev", "info", "lint", "start", "telemetry"]);
-const CUSTOM_SERVER_SUBCOMMANDS = new Set(["dev", "start"]);
+const CUSTOM_SERVER_SUBCOMMANDS = new Set(["start"]);
 
-function hasBuildOutput(packageRoot = resolvePackageRoot()) {
-  return (
-    fs.existsSync(path.join(packageRoot, ".next", "BUILD_ID")) ||
-    fs.existsSync(path.join(packageRoot, ".next", "build", "package.json"))
-  );
-}
-
-function resolveDefaultSubcommand(packageRoot = resolvePackageRoot()) {
-  return hasBuildOutput(packageRoot) ? "start" : "dev";
+function resolveDefaultSubcommand() {
+  return "dev";
 }
 
 function buildNextArgs(args = [], options = {}) {
-  const packageRoot = options.packageRoot || resolvePackageRoot();
-  const defaultSubcommand = resolveDefaultSubcommand(packageRoot);
+  const defaultSubcommand = resolveDefaultSubcommand();
 
   if (args.length === 0) {
     return [defaultSubcommand];
@@ -81,7 +72,6 @@ function run(args = [], options = {}) {
 
 module.exports = {
   buildNextArgs,
-  hasBuildOutput,
   resolveNextBin,
   resolveDefaultSubcommand,
   resolvePackageRoot,

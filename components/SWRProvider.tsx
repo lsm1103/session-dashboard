@@ -10,6 +10,7 @@ import type { RealtimeEvent } from '@/lib/ws-events';
 function RealtimeBridge() {
   const pathname = usePathname();
   const { mutate } = useSWRConfig();
+  const socketEnabled = process.env.NODE_ENV === 'production' && pathname === '/dashboard';
 
   const handleEvent = useCallback((event: RealtimeEvent) => {
     if (pathname !== '/dashboard') {
@@ -40,6 +41,7 @@ function RealtimeBridge() {
   }, [mutate, pathname]);
 
   const { connectionState, lastError, lastEvent } = useRealtimeSocket({
+    enabled: socketEnabled,
     onEvent: handleEvent,
   });
 
