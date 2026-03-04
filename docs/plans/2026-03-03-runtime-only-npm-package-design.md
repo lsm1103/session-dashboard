@@ -8,12 +8,17 @@ Use a prebuilt runtime package rather than a source package:
 
 - Run `next build` before packing or publishing.
 - Publish only runtime assets:
+  - `.next/BUILD_ID`
   - `.next/build`
+  - `.next/node_modules`
   - `.next/package.json`
+  - `.next/*.json`
+  - `.next/*.js`
+  - `.next/server`
   - `.next/static`
   - `public`
   - `scripts`
-  - `next.config.ts`
+  - `next.config.mjs`
   - documentation metadata already included by npm (`package.json`, `README.md`)
 - Keep runtime dependencies unchanged so `npm install -g session-dashboard` can still execute the packaged server.
 

@@ -57,12 +57,17 @@ Expected: PASS.
 **Step 1: Narrow the published file list**
 
 Keep only:
+- `.next/BUILD_ID`
 - `.next/build`
+- `.next/node_modules`
 - `.next/package.json`
+- `.next/*.json`
+- `.next/*.js`
+- `.next/server`
 - `.next/static`
 - `public`
 - `scripts`
-- `next.config.ts`
+- `next.config.mjs`
 
 Rely on npm’s default inclusion for `package.json` and `README.md`.
 
