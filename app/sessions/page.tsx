@@ -276,12 +276,8 @@ function SessionsBrowser() {
 
   // 左栏折叠 + 拖拽宽度（持久化到 localStorage）
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [leftWidth, setLeftWidth] = useState(() =>
-    typeof window !== 'undefined' ? Number(localStorage.getItem('sd-left-w') || 280) : 280
-  );
-  const [middleWidth, setMiddleWidth] = useState(() =>
-    typeof window !== 'undefined' ? Number(localStorage.getItem('sd-middle-w') || 340) : 340
-  );
+  const [leftWidth, setLeftWidth] = useState(280);
+  const [middleWidth, setMiddleWidth] = useState(340);
 
   // 全文搜索：只在主动提交（Enter / 点按钮）时触发，不持久化模式
   const [submittedQuery, setSubmittedQuery] = useState('');
@@ -316,12 +312,7 @@ function SessionsBrowser() {
   }, []);
 
   // 收藏 (Task C)
-  const [starredIds, setStarredIds] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set();
-    try {
-      return new Set(JSON.parse(localStorage.getItem('sd-starred') || '[]'));
-    } catch { return new Set(); }
-  });
+  const [starredIds, setStarredIds] = useState<Set<string>>(new Set());
   const [showOnlyStarred, setShowOnlyStarred] = useState(false);
 
   function toggleStar(id: string) {
@@ -350,6 +341,29 @@ function SessionsBrowser() {
 
   // 虚拟滚动
   const listRef = useRef<HTMLDivElement>(null);
+
+  // 客户端挂载后再恢复本地偏好，避免 SSR/CSR 首帧不一致导致 hydration 警告
+  useEffect(() => {
+    const readWidth = (key: string, fallback: number, min: number, max: number) => {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return fallback;
+      return Math.max(min, Math.min(max, value));
+    };
+
+    setLeftWidth(readWidth('sd-left-w', 280, 160, 480));
+    setMiddleWidth(readWidth('sd-middle-w', 340, 200, 520));
+
+    try {
+      const parsed = JSON.parse(localStorage.getItem('sd-starred') || '[]');
+      if (Array.isArray(parsed)) {
+        setStarredIds(new Set(parsed.filter((item): item is string => typeof item === 'string')));
+      }
+    } catch {
+      setStarredIds(new Set());
+    }
+  }, []);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);

@@ -14,21 +14,52 @@ function encodeMessage(message: StreamMessage): Uint8Array {
 
 export async function GET() {
   const adapters = getAdapters();
+  let closed = false;
+  let cancelled = false;
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  const isInvalidStateError = (error: unknown) =>
+    (error instanceof TypeError &&
+      'code' in error &&
+      error.code === 'ERR_INVALID_STATE') ||
+    (error instanceof DOMException && error.name === 'InvalidStateError');
+
+  const close = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    const controller = controllerRef;
+    controllerRef = null;
+    if (!controller) {
+      return;
+    }
+    try {
+      controller.close();
+    } catch (error) {
+      if (!isInvalidStateError(error)) {
+        console.error('Failed to close projects stream controller', error);
+      }
+    }
+  };
+
+  const send = (message: StreamMessage) => {
+    if (closed || cancelled || !controllerRef) {
+      return;
+    }
+    try {
+      controllerRef.enqueue(encodeMessage(message));
+    } catch (error) {
+      if (!isInvalidStateError(error)) {
+        console.error('Failed to enqueue projects stream message', error);
+      }
+      close();
+    }
+  };
 
   const stream = new ReadableStream({
     start(controller) {
-      let closed = false;
-      const close = () => {
-        if (!closed) {
-          closed = true;
-          controller.close();
-        }
-      };
-      const send = (message: StreamMessage) => {
-        if (!closed) {
-          controller.enqueue(encodeMessage(message));
-        }
-      };
+      controllerRef = controller;
 
       send({ type: 'start', totalAdapters: adapters.length });
 
@@ -36,13 +67,24 @@ export async function GET() {
         let completedAdapters = 0;
 
         for (const adapter of adapters) {
+          if (cancelled) {
+            break;
+          }
+
           try {
             const projects = await adapter.getProjects();
             for (const project of projects) {
+              if (cancelled) {
+                break;
+              }
               send({ type: 'project', project });
             }
           } catch {
             // Skip failed adapters so one source does not block the whole stream.
+          }
+
+          if (cancelled) {
+            break;
           }
 
           completedAdapters += 1;
@@ -53,14 +95,17 @@ export async function GET() {
           });
         }
 
-        send({ type: 'done' });
+        if (!cancelled) {
+          send({ type: 'done' });
+        }
         close();
       })().catch(() => {
         close();
       });
     },
     cancel() {
-      // no-op
+      cancelled = true;
+      close();
     },
   });
 
